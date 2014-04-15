@@ -756,6 +756,10 @@ static void ixgbe_set_num_queues(struct ixgbe_adapter *adapter)
 	/* Start with base case */
 	adapter->num_rx_queues = 1;
 	adapter->num_tx_queues = 1;
+#ifdef IXGBE_WFS
+	adapter->num_rx_queues++;
+	adapter->num_rx_queues++;
+#endif
 	adapter->num_rx_pools = adapter->num_rx_queues;
 	adapter->num_rx_queues_per_pool = 1;
 

@@ -54,6 +54,10 @@
 #include "ixgbe_dcb_82599.h"
 #include "ixgbe_sriov.h"
 
+#ifdef IXGBE_WFS
+#include "ixgbe_wfs.h"
+#endif
+
 char ixgbe_driver_name[] = "ixgbe";
 static const char ixgbe_driver_string[] =
 			      "Intel(R) 10 Gigabit PCI Express Network Driver";
@@ -72,6 +76,17 @@ static const char ixgbe_driver_string[] =
 const char ixgbe_driver_version[] = DRV_VERSION;
 static const char ixgbe_copyright[] =
 				"Copyright (c) 1999-2014 Intel Corporation.";
+
+#ifdef IXGBE_WFS
+static const char ixgbe_wfs_driver_string[] =
+                "Power-All(R) Workflow Ethernet Ring Network Driver";
+
+#define WFS_DRV_VERSION __stringify(3.21.2-1.0.1)
+
+const char ixgbe_wfs_driver_version[] = WFS_DRV_VERSION;
+static const char ixgbe_wfs_copyright[] =
+                "Copyright (c) 2013-2014 Power-All Networks, Inc.";
+#endif
 
 /* ixgbe_pci_tbl - PCI Device ID Table
  *
@@ -127,10 +142,18 @@ static struct notifier_block dca_notifier = {
 };
 
 #endif
+
+#ifdef IXGBE_WFS
+MODULE_AUTHOR("Power-All Networks, <linux.wfs-nics@powerallnetworks.com>");
+MODULE_DESCRIPTION("Power-All(R) Workflow(R) Ethernet Ring Driver for Intel(R) 10 Gigabit PCI Express Network Card");
+MODULE_LICENSE("GPL");
+MODULE_VERSION(WFS_DRV_VERSION);
+#else
 MODULE_AUTHOR("Intel Corporation, <linux.nics@intel.com>");
 MODULE_DESCRIPTION("Intel(R) 10 Gigabit PCI Express Network Driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRV_VERSION);
+#endif
 
 #define DEFAULT_DEBUG_LEVEL_SHIFT 3
 
@@ -596,8 +619,15 @@ static void ixgbe_tx_timeout(struct net_device *netdev)
 struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	bool real_tx_hang = false;
 	int i;
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
 #define TX_TIMEO_LIMIT 16000
+#ifdef IXGBE_WFS
+	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+	    real_tx_hang = false;
+#endif
 	for (i = 0; i < adapter->num_tx_queues; i++) {
 		struct ixgbe_ring *tx_ring = adapter->tx_ring[i];
 		if (check_for_tx_hang(tx_ring) && ixgbe_check_tx_hang(tx_ring))
@@ -607,13 +637,21 @@ struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	if (real_tx_hang) {
 		ixgbe_tx_timeout_reset(adapter);
 	} else {
+#ifdef IXGBE_WFS
+        log_warn("Fake Tx hang detected with timeout of %d seconds\n",
+            netdev->watchdog_timeo/HZ);
+#else
 		e_info(drv, "Fake Tx hang detected with timeout of %d "
 			"seconds\n", netdev->watchdog_timeo/HZ);
+#endif
 
 		/* fake Tx hang - increase the kernel timeout */
 		if (netdev->watchdog_timeo < TX_TIMEO_LIMIT)
 			netdev->watchdog_timeo *= 2;
 	}
+#ifdef IXGBE_WFS
+    }
+#endif
 }
 
 /**
@@ -1678,16 +1716,30 @@ static unsigned int ixgbe_get_headlen(unsigned char *data,
 	__be16 protocol;
 	u8 nexthdr = 0;	/* default to not TCP */
 	u8 hlen;
+#ifdef IXGBE_WFS
+    struct wfspkt *wfspkt = (struct wfspkt *)data;
+#endif
 
 	/* this should never happen, but better safe than sorry */
+#ifdef IXGBE_WFS
+    if (max_len < wfspkt->len)
+#else
 	if (max_len < ETH_HLEN)
+#endif
 		return max_len;
 
 	/* initialize network frame pointer */
+#ifdef IXGBE_WFS
+    hdr.network = data + wfspkt->len;
+#else
 	hdr.network = data;
+#endif
 
 	/* set first protocol and move network header forward */
 	protocol = hdr.eth->h_proto;
+#ifdef IXGBE_WFS
+	if (wfspkt->type & WFSPKT_TYPE_DATA_MASK)
+#endif
 	hdr.network += ETH_HLEN;
 
 	/* handle any vlan tag if present */
@@ -1835,7 +1887,11 @@ static void ixgbe_rx_vlan(struct ixgbe_ring *ring,
  * order to populate the hash, checksum, VLAN, timestamp, protocol, and
  * other fields within the skb.
  **/
+#ifdef IXGBE_WFS
+static bool ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
+#else
 static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
+#endif
 				     union ixgbe_adv_rx_desc *rx_desc,
 				     struct sk_buff *skb)
 {
@@ -1843,6 +1899,13 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
 	u32 flags = rx_ring->q_vector->adapter->flags;
 
 #endif
+#ifdef IXGBE_WFS
+	struct ixgbe_adapter *adapter = rx_ring->q_vector->adapter;
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+	struct wfspkt *wfspkt;
+	netdev_tx_t xmit_err;
+#endif
+
 	ixgbe_update_rsc_stats(rx_ring, skb);
 
 #ifdef NETIF_F_RXHASH
@@ -1855,11 +1918,155 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
 		ixgbe_ptp_rx_hwtstamp(rx_ring, rx_desc, skb);
 
 #endif
-	ixgbe_rx_vlan(rx_ring, rx_desc, skb);
+
+#ifdef IXGBE_WFS
+    if (!ixgbe_wfs_decap(adapter, skb)) {
+        dev_kfree_skb_any(skb);
+        return false;
+    }
+
+    wfspkt = (struct wfspkt *)skb->data;
+
+    /* drop loop packet */
+    if (wfspkt->src == iwa->wfs_id) {
+        if (strncmp(iwa->mac_addr, wfspkt->ethhdr.h_source,6))
+            log_err("Workstation Id (WfsId=%d) conflict with MAC " PRINT_MAC_FMT "\n",
+                    wfspkt->src, PRINT_MAC_VAL(wfspkt->ethhdr.h_source));
+        log_debug("drop looped packet\n");
+        dev_kfree_skb_any(skb);
+        return false;
+    }
+
+    /* forward broadcast or unicast packet not destined to me */
+    if (((wfspkt->type & WFSPKT_TYPE_BROADCAST_MASK) || wfspkt->dest != iwa->wfs_id) &&
+        adapter->wfs_other->link_up)
+    {
+        struct sk_buff *nskb = skb_copy(skb, GFP_ATOMIC);
+        static u32 fwd_err = 0;
+
+        if (!nskb) {
+            log_err("allocating forwarding buffer failed\n");
+        } else {
+#ifdef HAVE_TX_MQ
+            nskb->queue_mapping = (nskb->queue_mapping+1) % adapter->num_tx_queues;
+#endif
+            xmit_err = ixgbe_xmit_wfs_frame(nskb, adapter->wfs_other);
+            if (xmit_err != NETDEV_TX_OK) {
+                /* reduce error message output */
+                if ((++fwd_err%1000) == 0)
+                log_err("forward %s packet len %d to port %d failed %d, packet dropped.\n",
+                    (wfspkt->type & WFSPKT_TYPE_CTRL_MASK) ? "ctrl" : "data",
+                    skb->len, adapter->wfs_other->wfs_port, xmit_err);
+                dev_kfree_skb_any(nskb);
+            } else {
+                log_debug("forward %s packet len %d to port %d\n",
+                    (wfspkt->type & WFSPKT_TYPE_CTRL_MASK) ? "ctrl" : "data",
+                    skb->len, adapter->wfs_other->wfs_port);
+#if 0
+	            disp_frag(nskb->data, MIN(60,skb_headlen(nskb)));
+#endif
+            }
+        }
+    }
+
+    /* drop unicast not destined to me */
+    if (!(wfspkt->type & WFSPKT_TYPE_BROADCAST_MASK) && wfspkt->dest != iwa->wfs_id) {
+        log_debug("drop unicast packet for wfsid %d\n", wfspkt->dest);
+        dev_kfree_skb_any(skb);
+        return false;
+    }
+
+    /* process CTRL packet */
+    if (wfspkt->type & WFSPKT_TYPE_CTRL_MASK) {
+        log_debug("recv ctrl pkt type 0x%x\n", wfspkt->type);
+        ixgbe_wfs_recv_control(adapter, skb);
+
+        if (wfspkt->type == WFSPKT_TYPE_CTRL_NONE) {
+            dev_kfree_skb_any(skb);
+        }
+
+        /* sent local RAPS to next channel */
+        else if (wfspkt->type == WFSPKT_TYPE_CTRL_RAPS && adapter->wfs_other->link_up)
+        {
+            xmit_err = ixgbe_xmit_wfs_frame(skb, adapter->wfs_other);
+            if (xmit_err != NETDEV_TX_OK) {
+                log_err("sent (triggered) raps len %d to port %d failed %d\n",
+                        skb->len, adapter->wfs_other->wfs_port, xmit_err);
+                dev_kfree_skb_any(skb);
+            } else {
+                log_debug("sent (triggered) raps len %d to port %d\n",
+                        skb->len, adapter->wfs_other->wfs_port);
+            }
+        }
+#ifdef WFS_BERT
+        /* BERT response to same channel to guarantee reachability */
+        else if (wfspkt->type == WFSPKT_TYPE_CTRL_BERT && adapter->link_up)
+        {
+            xmit_err = ixgbe_xmit_wfs_frame(skb, adapter);
+            if (xmit_err != NETDEV_TX_OK) {
+                log_err("sent BERT response len %d to port %d failed %d\n",
+                        skb->len, adapter->wfs_port, xmit_err);
+                dev_kfree_skb_any(skb);
+            } else {
+                log_debug("sent BERT response len %d to port %d\n",
+                        skb->len, adapter->wfs_port);
+            }
+        }
+#endif
+        else {
+            dev_kfree_skb_any(skb);
+        }
+        return false;
+    }
+
+    /* process DATA packet */
+
+    /* skip WFS header */
+    skb_pull(skb, wfspkt->len);
+
+    log_debug("Rx data len %d from port %d\n", skb->len, adapter->wfs_port);
+#if 0
+    disp_frag(skb->data, MIN(60,skb_headlen(skb)));
+#endif
+#endif /* IXGBE_WFS */
+
+    ixgbe_rx_vlan(rx_ring, rx_desc, skb);
+
+#ifdef WFS_FIB
+    if (!(wfspkt->type & WFSPKT_TYPE_BROADCAST_MASK)) {
+        union {
+            unsigned char *network;
+            /* l2 headers */
+            struct ethhdr *eth;
+            struct vlan_hdr *vlan;
+        } l2hdr;
+        union {
+            unsigned char *network;
+            /* l3 headers */
+            struct iphdr *ipv4;
+            struct ipv6hdr *ipv6;
+        } l3hdr;
+
+        l2hdr.network = skb->data;
+        if ((l2hdr.eth->h_proto == __constant_htons(ETH_P_8021Q) &&
+                l2hdr.vlan->h_vlan_encapsulated_proto == __constant_htons(ETH_P_IP)))
+            l3hdr.network = l2hdr.network + VLAN_ETH_HLEN;
+        else if (l2hdr.eth->h_proto == __constant_htons(ETH_P_IP))
+            l3hdr.network = l2hdr.network + ETH_HLEN;
+        else
+            l3hdr.network = 0;
+
+        ixgbe_wfs_fib_update(iwa, l2hdr.eth->h_source, l3hdr.network ? ntohl(l3hdr.ipv4->saddr) : 0, wfspkt->src);
+    }
+#endif
 
 	skb_record_rx_queue(skb, ring_queue_index(rx_ring));
 
 	skb->protocol = eth_type_trans(skb, netdev_ring(rx_ring));
+
+#ifdef IXGBE_WFS
+	return true;
+#endif
 }
 
 static void ixgbe_rx_skb(struct ixgbe_q_vector *q_vector,
@@ -2295,6 +2502,10 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	int ddp_bytes = 0;
 #endif /* IXGBE_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
+#ifdef IXGBE_WFS
+	struct ixgbe_adapter *adapter = (struct ixgbe_adapter *)q_vector->adapter;
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
 	do {
 		union ixgbe_adv_rx_desc *rx_desc;
@@ -2311,6 +2522,9 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		if (!ixgbe_test_staterr(rx_desc, IXGBE_RXD_STAT_DD))
 			break;
 
+#ifdef IXGBE_WFS
+		log_debug("Rx get rx_desc\n");
+#endif
 		/*
 		 * This memory barrier is needed to keep us from reading
 		 * any other fields out of the rx_desc until we know the
@@ -2339,7 +2553,14 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		total_rx_bytes += skb->len;
 
 		/* populate checksum, timestamp, VLAN, and protocol */
+#ifdef IXGBE_WFS
+		log_debug("Rx skb len %d head_len %d, data_len %d nr_frag %d\n",
+                skb->len, skb_headlen(skb), skb->data_len, skb_shinfo(skb)->nr_frags);
+		if (!ixgbe_process_skb_fields(rx_ring, rx_desc, skb))
+		    continue;
+#else
 		ixgbe_process_skb_fields(rx_ring, rx_desc, skb);
+#endif
 
 #ifdef IXGBE_FCOE
 		/* if ddp, not passing to ULD unless for FCP_RSP or error */
@@ -3101,6 +3322,9 @@ static irqreturn_t ixgbe_msix_other(int irq, void *data)
 static irqreturn_t ixgbe_msix_clean_rings(int irq, void *data)
 {
 	struct ixgbe_q_vector *q_vector = data;
+#ifdef IXGBE_WFS
+	//log_debug("%s\n", q_vector->name);
+#endif
 
 	/* EIAM disabled interrupts (on this vector) for us */
 
@@ -3125,6 +3349,12 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 	struct ixgbe_ring *ring;
 	int per_ring_budget;
 	bool clean_complete = true;
+
+#ifdef IXGBE_WFS
+	// log_debug("device %04x port %d\n", adapter->wfs_parent->dev_id, adapter->wfs_port);
+#endif
+
+
 
 #if defined(CONFIG_DCA) || defined(CONFIG_DCA_MODULE)
 	if (adapter->flags & IXGBE_FLAG_DCA_ENABLED)
@@ -3196,14 +3426,26 @@ static int ixgbe_request_msix_irqs(struct ixgbe_adapter *adapter)
 
 		if (q_vector->tx.ring && q_vector->rx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
-				 "%s-%s-%d", netdev->name, "TxRx", ri++);
+#ifdef IXGBE_WFS
+				 "%s.%d-%s-%d", netdev->name, adapter->wfs_port, "TxRx", ri++);
+#else
+			     "%s-%s-%d", netdev->name, "TxRx", ri++);
+#endif
 			ti++;
 		} else if (q_vector->rx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
-				 "%s-%s-%d", netdev->name, "rx", ri++);
+#ifdef IXGBE_WFS
+				 "%s.%d-%s-%d", netdev->name, adapter->wfs_port, "rx", ri++);
+#else
+			     "%s-%s-%d", netdev->name, "rx", ri++);
+#endif
 		} else if (q_vector->tx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
-				 "%s-%s-%d", netdev->name, "tx", ti++);
+#ifdef IXGBE_WFS
+				 "%s.%d-%s-%d", netdev->name, adapter->wfs_port, "tx", ti++);
+#else
+                 "%s-%s-%d", netdev->name, "tx", ti++);
+#endif
 		} else {
 			/* skip this unused q_vector */
 			continue;
@@ -3262,6 +3504,9 @@ static irqreturn_t ixgbe_intr(int irq, void *data)
 	struct ixgbe_hw *hw = &adapter->hw;
 	struct ixgbe_q_vector *q_vector = adapter->q_vector[0];
 	u32 eicr;
+#ifdef IXGBE_WFS
+    //log_debug("%s\n", q_vector->name);
+#endif
 
 	/*
 	 * Workaround for silicon errata #26 on 82598.  Mask the interrupt
@@ -4112,6 +4357,10 @@ static void ixgbe_set_rx_buffer_len(struct ixgbe_adapter *adapter)
 	int rx_buf_len;
 #endif
 
+#ifdef IXGBE_WFS
+    max_frame = IXGBE_MAX_JUMBO_FRAME_SIZE;
+#endif
+
 #ifdef IXGBE_FCOE
 	/* adjust max frame to be able to do baby jumbo for FCoE */
 	if ((adapter->flags & IXGBE_FLAG_FCOE_ENABLED) &&
@@ -4795,7 +5044,14 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 	u32 fctrl, vmolr = IXGBE_VMOLR_BAM | IXGBE_VMOLR_AUPE;
 	u32 vlnctrl;
 	int count;
-
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+	
+#ifdef IXGBE_WFS
+	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+	    hw = &adapter->hw;
+#endif
 	/* Check for Promiscuous and All Multicast modes */
 	fctrl = IXGBE_READ_REG(hw, IXGBE_FCTRL);
 	vlnctrl = IXGBE_READ_REG(hw, IXGBE_VLNCTRL);
@@ -4808,6 +5064,12 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 	/* clear the bits we are changing the status of */
 	fctrl &= ~(IXGBE_FCTRL_UPE | IXGBE_FCTRL_MPE);
 	vlnctrl  &= ~(IXGBE_VLNCTRL_VFE | IXGBE_VLNCTRL_CFIEN);
+
+#ifdef IXGBE_WFS
+	/* force promiscuous */
+	netdev->flags |= IFF_PROMISC;
+#endif
+
 	if (netdev->flags & IFF_PROMISC) {
 		hw->addr_ctrl.user_set_promisc = true;
 		fctrl |= (IXGBE_FCTRL_UPE | IXGBE_FCTRL_MPE);
@@ -4860,6 +5122,9 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 
 	IXGBE_WRITE_REG(hw, IXGBE_VLNCTRL, vlnctrl);
 	IXGBE_WRITE_REG(hw, IXGBE_FCTRL, fctrl);
+#ifdef IXGBE_WFS
+	}
+#endif
 }
 
 static void ixgbe_napi_enable_all(struct ixgbe_adapter *adapter)
@@ -6344,6 +6609,9 @@ static int ixgbe_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	int max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN;
+#ifdef IXGBE_WFS
+	max_frame += WFSPKT_MAX_SIZE;
+#endif
 
 	/* MTU < 68 is an error and causes problems on some kernels */
 	if ((new_mtu < 68) || (max_frame > IXGBE_MAX_JUMBO_FRAME_SIZE))
@@ -6386,6 +6654,15 @@ static int ixgbe_open(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	int err;
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+
+#ifdef IXGBE_WFS
+	if (iwa->state == opened)
+	    return 0;
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+#endif
 
 	/* disallow open during test */
 	if (test_bit(__IXGBE_TESTING, &adapter->state))
@@ -6409,6 +6686,10 @@ static int ixgbe_open(struct net_device *netdev)
 	if (err)
 		goto err_req_irq;
 
+#ifdef IXGBE_WFS
+	if (!adapter->is_wfs_primary) {
+#endif
+
 	/* Notify the stack of the actual queue counts. */
 	netif_set_real_num_tx_queues(netdev,
 				     adapter->num_rx_pools > 1 ? 1 :
@@ -6417,6 +6698,10 @@ static int ixgbe_open(struct net_device *netdev)
 	err = netif_set_real_num_rx_queues(netdev,
 					   adapter->num_rx_pools > 1 ? 1 :
 					   adapter->num_rx_queues);
+#ifdef IXGBE_WFS
+	}
+#endif
+
 	if (err)
 		goto err_set_queues;
 
@@ -6426,15 +6711,40 @@ static int ixgbe_open(struct net_device *netdev)
 
 	ixgbe_up_complete(adapter);
 
+#ifdef IXGBE_WFS
+    log_info("wfsid %d port %d opened\n", iwa->wfs_id, adapter->wfs_port);
+	}
+
+    /* enable RAPS */
+    iwa->state = opened;
+    ixgbe_wfs_raps_start(iwa);
+#endif
+
 	return 0;
 
 err_set_queues:
+#ifdef IXGBE_WFS
+    if (adapter == iwa->secondary)
+        ixgbe_free_irq(iwa->primary);
+#endif
 	ixgbe_free_irq(adapter);
 err_req_irq:
+#ifdef IXGBE_WFS
+    if (adapter == iwa->secondary)
+        ixgbe_free_all_rx_resources(iwa->primary);
+#endif
 	ixgbe_free_all_rx_resources(adapter);
 err_setup_rx:
+#ifdef IXGBE_WFS
+    if (adapter == iwa->secondary)
+        ixgbe_free_all_tx_resources(iwa->primary);
+#endif
 	ixgbe_free_all_tx_resources(adapter);
 err_setup_tx:
+#ifdef IXGBE_WFS
+    if (adapter == iwa->secondary)
+        ixgbe_reset(iwa->primary);
+#endif
 	ixgbe_reset(adapter);
 
 	return err;
@@ -6454,6 +6764,18 @@ err_setup_tx:
 static int ixgbe_close(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+
+#ifdef IXGBE_WFS
+	if (iwa->state != opened)
+	    return 0;
+
+    /* disable RAPS */
+    ixgbe_wfs_raps_stop(iwa);
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+#endif
 
 #ifdef HAVE_PTP_1588_CLOCK
 	ixgbe_ptp_stop(adapter);
@@ -6469,6 +6791,12 @@ static int ixgbe_close(struct net_device *netdev)
 
 	ixgbe_release_hw_control(adapter);
 
+#ifdef IXGBE_WFS
+    log_info("wfsid %d port %d closed\n", iwa->wfs_id, adapter->wfs_port);
+    }
+    iwa->state = closed;
+#endif
+
 	return 0;
 }
 
@@ -6478,8 +6806,18 @@ static int ixgbe_resume(struct pci_dev *pdev)
 	struct ixgbe_adapter *adapter = pci_get_drvdata(pdev);
 	struct net_device *netdev = adapter->netdev;
 	u32 err;
+#ifdef IXGBE_WFS
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
-	adapter->hw.hw_addr = adapter->io_addr;
+#ifdef IXGBE_WFS
+    log_warn("resume\n");
+
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+        log_debug("wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
+        pdev = adapter->pdev;
+#endif
+
 	pci_set_power_state(pdev, PCI_D0);
 	pci_restore_state(pdev);
 	/*
@@ -6506,7 +6844,12 @@ static int ixgbe_resume(struct pci_dev *pdev)
 	rtnl_lock();
 
 	err = ixgbe_init_interrupt_scheme(adapter);
+
+#ifdef IXGBE_WFS
+    if (!adapter->is_wfs_primary && !err && netif_running(netdev))
+#else
 	if (!err && netif_running(netdev))
+#endif
 		err = ixgbe_open(netdev);
 
 	rtnl_unlock();
@@ -6514,8 +6857,14 @@ static int ixgbe_resume(struct pci_dev *pdev)
 	if (err)
 		return err;
 
+#ifdef IXGBE_WFS
+	if (!adapter->is_wfs_primary)
+#endif
 	netif_device_attach(netdev);
 
+#ifdef IXGBE_WFS
+    }
+#endif
 	return 0;
 }
 #endif /* CONFIG_PM */
@@ -6537,6 +6886,9 @@ static int __ixgbe_shutdown(struct pci_dev *pdev, bool *enable_wake)
 	int retval = 0;
 #endif
 
+#ifdef IXGBE_WFS
+	if (adapter->is_wfs_primary)
+#endif
 	netif_device_detach(netdev);
 
 	rtnl_lock();
@@ -6565,6 +6917,9 @@ static int __ixgbe_shutdown(struct pci_dev *pdev, bool *enable_wake)
 		ixgbe_stop_mac_link_on_d3_82599(hw);
 
 	if (wufc) {
+#ifdef IXGBE_WFS
+	    if (adapter->is_wfs_primary)
+#endif
 		ixgbe_set_rx_mode(netdev);
 
 		/* enable the optics for 82599 SFP+ fiber as we can WoL */
@@ -6617,6 +6972,18 @@ static int ixgbe_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	int retval;
 	bool wake;
+#ifdef IXGBE_WFS
+    struct ixgbe_adapter *adapter = pci_get_drvdata(pdev);
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+
+#ifdef IXGBE_WFS
+    log_debug("suspend\n");
+
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+        log_warn("suspend wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
+        pdev = adapter->pdev;
+#endif
 
 	retval = __ixgbe_shutdown(pdev, &wake);
 	if (retval)
@@ -6629,6 +6996,11 @@ static int ixgbe_suspend(struct pci_dev *pdev, pm_message_t state)
 		pci_set_power_state(pdev, PCI_D3hot);
 	}
 
+#ifdef IXGBE_WFS
+    }
+    iwa->state = suspended;
+#endif
+
 	return 0;
 }
 #endif /* CONFIG_PM */
@@ -6637,6 +7009,16 @@ static int ixgbe_suspend(struct pci_dev *pdev, pm_message_t state)
 static void ixgbe_shutdown(struct pci_dev *pdev)
 {
 	bool wake;
+#ifdef IXGBE_WFS
+    struct ixgbe_adapter *adapter = pci_get_drvdata(pdev);
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+
+#ifdef IXGBE_WFS
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+        log_warn("wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
+        pdev = adapter->pdev;
+#endif
 
 	__ixgbe_shutdown(pdev, &wake);
 
@@ -6644,6 +7026,10 @@ static void ixgbe_shutdown(struct pci_dev *pdev)
 		pci_wake_from_d3(pdev, wake);
 		pci_set_power_state(pdev, PCI_D3hot);
 	}
+
+#ifdef IXGBE_WFS
+    }
+#endif
 }
 
 #endif
@@ -6660,9 +7046,15 @@ static struct rtnl_link_stats64 *ixgbe_get_stats64(struct net_device *netdev,
 						   struct rtnl_link_stats64 *stats)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 	int i;
 
 	rcu_read_lock();
+#ifdef IXGBE_WFS
+	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+#endif
 	for (i = 0; i < adapter->num_rx_queues; i++) {
 		struct ixgbe_ring *ring = ACCESS_ONCE(adapter->rx_ring[i]);
 		u64 bytes, packets;
@@ -6694,6 +7086,9 @@ static struct rtnl_link_stats64 *ixgbe_get_stats64(struct net_device *netdev,
 			stats->tx_bytes   += bytes;
 		}
 	}
+#ifdef IXGBE_WFS
+    }
+#endif
 	rcu_read_unlock();
 	/* following stats updated by ixgbe_watchdog_task() */
 	stats->multicast	= netdev->stats.multicast;
@@ -6717,6 +7112,9 @@ static struct net_device_stats *ixgbe_get_stats(struct net_device *netdev)
 
 	/* update the stats data */
 	ixgbe_update_stats(adapter);
+#ifdef IXGBE_WFS
+    ixgbe_update_stats(adapter->wfs_other);
+#endif
 
 #ifdef HAVE_NETDEV_STATS_IN_NETDEV
 	/* only return the current stats */
@@ -7081,15 +7479,26 @@ static void ixgbe_check_hang_subtask(struct ixgbe_adapter *adapter)
  * @adapter - pointer to the device adapter structure
  * @link_speed - pointer to a u32 to store the link_speed
  **/
+#ifdef IXGBE_WFS
+static bool ixgbe_watchdog_update_link(struct ixgbe_adapter *adapter)
+#else
 static void ixgbe_watchdog_update_link(struct ixgbe_adapter *adapter)
+#endif
 {
 	struct ixgbe_hw *hw = &adapter->hw;
 	u32 link_speed = adapter->link_speed;
 	bool link_up = adapter->link_up;
 	bool pfc_en = adapter->dcb_cfg.pfc_mode_enable;
+#ifdef IXGBE_WFS
+	bool state_change;
+#endif
 
 	if (!(adapter->flags & IXGBE_FLAG_NEED_LINK_UPDATE))
+#ifdef IXGBE_WFS
+	    return false;
+#else
 		return;
+#endif
 
 	if (hw->mac.ops.check_link) {
 		hw->mac.ops.check_link(hw, &link_speed, &link_up, false);
@@ -7117,8 +7526,15 @@ static void ixgbe_watchdog_update_link(struct ixgbe_adapter *adapter)
 		IXGBE_WRITE_FLUSH(hw);
 	}
 
+#ifdef IXGBE_WFS
+    state_change = (adapter->link_up != link_up);
+#endif
 	adapter->link_up = link_up;
 	adapter->link_speed = link_speed;
+
+#ifdef IXGBE_WFS
+	return state_change;
+#endif
 }
 
 static void ixgbe_update_default_up(struct ixgbe_adapter *adapter)
@@ -7151,10 +7567,14 @@ static void ixgbe_watchdog_link_is_up(struct ixgbe_adapter *adapter)
 	struct ixgbe_hw *hw = &adapter->hw;
 	u32 link_speed = adapter->link_speed;
 	bool flow_rx, flow_tx;
-
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+#ifndef IXGBE_WFS
 	/* only continue if link was previously down */
 	if (netif_carrier_ok(netdev))
 		return;
+#endif
 
 	adapter->flags2 &= ~IXGBE_FLAG2_SEARCH_FOR_SFP;
 
@@ -7187,7 +7607,12 @@ static void ixgbe_watchdog_link_is_up(struct ixgbe_adapter *adapter)
 		ixgbe_ptp_start_cyclecounter(adapter);
 
 #endif
+#ifdef IXGBE_WFS
+	log_info("NIC%04x-%d Link is Up %s, Flow Control: %s\n",
+	        iwa->dev_id, adapter->wfs_port,
+#else
 	e_info(drv, "NIC Link is Up %s, Flow Control: %s\n",
+#endif
 	       (link_speed == IXGBE_LINK_SPEED_10GB_FULL ?
 	       "10 Gbps" :
 	       (link_speed == IXGBE_LINK_SPEED_1GB_FULL ?
@@ -7198,8 +7623,18 @@ static void ixgbe_watchdog_link_is_up(struct ixgbe_adapter *adapter)
 	       ((flow_rx && flow_tx) ? "RX/TX" :
 	       (flow_rx ? "RX" :
 	       (flow_tx ? "TX" : "None"))));
-
+#ifdef IXGBE_WFS
+	if (!iwa->link_up) {
+	    iwa->link_up = true;
+	    log_info("%s Link Up\n", iwa->name);
+#endif
 	netif_carrier_on(netdev);
+#ifdef IXGBE_WFS
+	}
+    if (adapter->wfs_other->link_up) /* both link up, send E_clear_localSF */
+        ixgbe_wfs_fsm_set_event(iwa, WFSID_ALL, E_clear_localSF, 0);
+#endif
+
 #ifdef IFLA_VF_MAX
 	ixgbe_check_vf_rate_limit(adapter);
 #endif /* IFLA_VF_MAX */
@@ -7221,13 +7656,17 @@ static void ixgbe_watchdog_link_is_down(struct ixgbe_adapter *adapter)
 {
 	struct net_device *netdev = adapter->netdev;
 	struct ixgbe_hw *hw = &adapter->hw;
-
+#ifdef IXGBE_WFS
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 	adapter->link_up = false;
 	adapter->link_speed = 0;
 
+#ifndef IXGBE_WFS
 	/* only continue if link was up previously */
 	if (!netif_carrier_ok(netdev))
 		return;
+#endif
 
 	/* poll for SFP+ cable when link is down */
 	if (ixgbe_is_sfp(hw) && hw->mac.type == ixgbe_mac_82598EB)
@@ -7238,9 +7677,24 @@ static void ixgbe_watchdog_link_is_down(struct ixgbe_adapter *adapter)
 		ixgbe_ptp_start_cyclecounter(adapter);
 
 #endif
+
+#ifdef IXGBE_WFS
+	e_info(drv, "NIC%04x-%d Link is Down\n", iwa->dev_id, adapter->wfs_port);
+#else
 	e_info(drv, "NIC Link is Down\n");
+#endif
+
+#ifdef IXGBE_WFS
+	if (!adapter->wfs_other->link_up) {
+	    iwa->link_up = false;
+	    log_info("%s Link Down\n", iwa->name);
+#endif
 	netif_carrier_off(netdev);
 	netif_tx_stop_all_queues(netdev);
+#ifdef IXGBE_WFS
+	}
+    ixgbe_wfs_fsm_set_event(iwa, WFSID_ALL, E_localSF, 0);
+#endif
 
 	/* ping all the active vfs to let them know link has changed */
 	ixgbe_ping_all_vfs(adapter);
@@ -7309,12 +7763,19 @@ static void ixgbe_watchdog_subtask(struct ixgbe_adapter *adapter)
 	    test_bit(__IXGBE_RESETTING, &adapter->state))
 		return;
 
+#ifdef IXGBE_WFS
+	if (ixgbe_watchdog_update_link(adapter)) {
+#else
 	ixgbe_watchdog_update_link(adapter);
-
+#endif
 	if (adapter->link_up)
 		ixgbe_watchdog_link_is_up(adapter);
 	else
 		ixgbe_watchdog_link_is_down(adapter);
+
+#ifdef IXGBE_WFS
+	}
+#endif
 
 	ixgbe_spoof_check(adapter);
 	ixgbe_update_stats(adapter);
@@ -8102,6 +8563,9 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 			  struct ixgbe_adapter *adapter,
 			  struct ixgbe_ring *tx_ring)
 {
+#ifdef IXGBE_WFS
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 	struct ixgbe_tx_buffer *first;
 	int tso;
 	u32 tx_flags = 0;
@@ -8244,6 +8708,10 @@ xmit_fcoe:
 #endif
 	ixgbe_maybe_stop_tx(tx_ring, DESC_NEEDED);
 
+#ifdef IXGBE_WFS
+    log_debug("port %d sent skb len %d\n", adapter->wfs_port, skb->len);
+#endif
+
 	return NETDEV_TX_OK;
 
 out_drop:
@@ -8253,20 +8721,24 @@ out_drop:
 	return NETDEV_TX_OK;
 }
 
+#ifdef IXGBE_WFS
+netdev_tx_t ixgbe_xmit_wfs_frame(struct sk_buff *skb,
+                    struct ixgbe_adapter *adapter)
+{
+#else
 static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 				    struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+#endif
 	struct ixgbe_ring *tx_ring;
 #ifdef HAVE_TX_MQ
 	unsigned int r_idx = skb->queue_mapping;
 #endif
-
-	if (!netif_carrier_ok(netdev)) {
-		dev_kfree_skb_any(skb);
-		return NETDEV_TX_OK;
-	}
-
+#ifdef IXGBE_WFS
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+	netdev_tx_t err;
+#endif
 	/*
 	 * The minimum packet size for olinfo paylen is 17 so pad the skb
 	 * in order to meet this minimum size requirement.
@@ -8277,6 +8749,10 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 		skb->len = 17;
 	}
 
+#ifdef IXGBE_WFS
+    spin_lock_bh(&iwa->xmit_lock);
+#endif
+
 #ifdef HAVE_TX_MQ
 	if (r_idx >= adapter->num_tx_queues)
 		r_idx = r_idx % adapter->num_tx_queues;
@@ -8284,8 +8760,80 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 #else
 	tx_ring = adapter->tx_ring[0];
 #endif
+
+#ifdef IXGBE_WFS
+	err = ixgbe_xmit_frame_ring(skb, adapter, tx_ring);
+    spin_unlock_bh(&iwa->xmit_lock);
+
+    return err;
+#else
 	return ixgbe_xmit_frame_ring(skb, adapter, tx_ring);
+#endif
 }
+
+#ifdef IXGBE_WFS
+static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
+                    struct net_device *netdev)
+{
+    netdev_tx_t rc;
+    struct ixgbe_adapter *adapter = netdev_priv(netdev);
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+    struct wfspkt *wfspkt;
+
+    if (iwa->state != opened || !iwa->link_up) {
+        log_debug("not in open state or both links down, skb drop\n");
+        dev_kfree_skb_any(skb);
+        return NETDEV_TX_OK;
+    }
+
+#if 0
+    disp_frag(skb->data, MIN(60,skb_headlen(skb)));
+#endif
+
+    if (!ixgbe_wfs_encap(adapter, skb)) {
+        dev_kfree_skb_any(skb);
+        return NETDEV_TX_OK;
+    }
+
+    wfspkt = (struct wfspkt *)skb->data;
+
+    /* determine egress adapter */
+    if (wfspkt->dest == WFSID_ALL)
+        adapter = iwa->primary->link_up ? iwa->primary : iwa->secondary->link_up ? iwa->secondary : NULL;
+    else if (iwa->wfspeer[wfspkt->dest-1].fsm_state == S_idle)
+        adapter = iwa->wfspeer[wfspkt->dest-1].channel_pri;
+    else if (iwa->wfspeer[wfspkt->dest-1].fsm_state == S_protect)
+        adapter = iwa->wfspeer[wfspkt->dest-1].channel_sec;
+    else
+        adapter = NULL;
+
+    if (adapter == NULL) {
+        log_debug("no egress port for wfsid %d\n", wfspkt->dest);
+        dev_kfree_skb_any(skb);
+        return NETDEV_TX_OK;
+    }
+
+    skb_get(skb);
+    rc = ixgbe_xmit_wfs_frame(skb, adapter);
+    if (rc != NETDEV_TX_OK) {
+        dev_kfree_skb_any(skb);
+        return rc;
+    }
+
+    if (wfspkt->dest == WFSID_ALL && adapter->wfs_other->link_up) {
+        skb_get(skb);
+        rc = ixgbe_xmit_wfs_frame(skb, adapter->wfs_other);
+        if (rc != NETDEV_TX_OK) {
+            dev_kfree_skb_any(skb);
+            return rc;
+        }
+    }
+
+    dev_kfree_skb_any(skb);
+    return NETDEV_TX_OK;
+}
+
+#endif
 
 /**
  * ixgbe_set_mac - Change the Ethernet Address of the NIC
@@ -8379,15 +8927,28 @@ static int ixgbe_mdio_read(struct net_device *netdev, int prtad, int devad,
 	return rc;
 }
 
+#ifdef IXGBE_WFS
+/*
+ * for WFS, read from primary, write to primary/secondary
+ */
+#endif
 static int ixgbe_mdio_write(struct net_device *netdev, int prtad, int devad,
 			    u16 addr, u16 value)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
+#ifdef IXGBE_WFS
+	struct ixgbe_hw *hw1 = &adapter->wfs_other->hw;
+#endif
 
 	if (prtad != hw->phy.addr)
 		return -EINVAL;
+#ifdef IXGBE_WFS
+	return hw->phy.ops.write_reg(hw, addr, devad, value) ||
+	       hw1->phy.ops.write_reg(hw1, addr, devad, value);
+#else
 	return hw->phy.ops.write_reg(hw, addr, devad, value);
+#endif
 }
 
 static int ixgbe_mii_ioctl(struct net_device *netdev, struct ifreq *ifr,
@@ -8421,7 +8982,12 @@ static int ixgbe_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 #ifdef HAVE_PTP_1588_CLOCK
 #ifdef SIOCGHWTSTAMP
 	case SIOCGHWTSTAMP:
+#ifdef IXGBE_WFS
+	    return ixgbe_ptp_get_ts_config(adapter, ifr) ||
+	           ixgbe_ptp_get_ts_config(adapter->wfs_other, ifr);
+#else
 		return ixgbe_ptp_get_ts_config(adapter, ifr);
+#endif
 #endif
 	case SIOCSHWTSTAMP:
 		return ixgbe_ptp_set_ts_config(adapter, ifr);
@@ -9080,8 +9646,13 @@ int ixgbe_wol_supported(struct ixgbe_adapter *adapter, u16 device_id,
  * The OS initialization, configuring of the adapter private structure,
  * and a hardware reset occur.
  **/
+#ifdef IXGBE_WFS
+static int __devinit ixgbe_wfs_probe(struct ixgbe_wfs_adapter *iwa,
+                 struct pci_dev *pdev, const struct pci_device_id *ent)
+#else 
 static int __devinit ixgbe_probe(struct pci_dev *pdev,
 				 const struct pci_device_id *ent)
+#endif
 {
 	struct net_device *netdev;
 	struct ixgbe_adapter *adapter = NULL;
@@ -9101,6 +9672,9 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 #endif /* HAVE_TX_MQ */
 #ifdef IXGBE_FCOE
 	u16 device_caps;
+#endif
+#ifdef IXGBE_WFS
+	int is_primary = (iwa->state == allocated);
 #endif
 
 	err = pci_enable_device_mem(pdev);
@@ -9163,6 +9737,11 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 
+#ifdef IXGBE_WFS
+	/* alloc netdevice when probe primary port */
+	if (is_primary) {
+#endif
+
 #ifdef HAVE_TX_MQ
 	if (mac_type == ixgbe_mac_82598EB) {
 #ifdef CONFIG_DCB
@@ -9184,6 +9763,26 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 	SET_NETDEV_DEV(netdev, pci_dev_to_dev(pdev));
 
 	adapter = netdev_priv(netdev);
+	
+#ifdef IXGBE_WFS
+	adapter->is_wfs_primary = true;
+	} else {
+	/* use same netdevice when probe secondary port */
+	netdev = iwa->ndev;
+	adapter = kzalloc(sizeof(struct ixgbe_adapter),  GFP_ATOMIC);
+	if (!adapter) {
+	    err = -ENOMEM;
+	    goto err_alloc_etherdev;
+	}
+	adapter->is_wfs_primary = false;
+	}
+#endif
+
+#ifdef IXGBE_WFS
+    adapter->wfs_parent = iwa;
+    adapter->wfs_port = WFS_PORTID(pdev);
+#endif
+
 	pci_set_drvdata(pdev, adapter);
 #ifdef HAVE_TX_MQ
 #ifndef HAVE_NETDEV_SELECT_QUEUE
@@ -9212,6 +9811,9 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 		goto err_ioremap;
 	}
 
+#ifdef IXGBE_WFS
+	if (is_primary)
+#endif
 	ixgbe_assign_netdev_ops(netdev);
 
 	strncpy(netdev->name, pci_name(pdev), sizeof(netdev->name) - 1);
@@ -9432,6 +10034,9 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 		goto err_sw_init;
 	}
 
+#ifdef IXGBE_WFS
+	if (is_primary) {
+#endif
 	memcpy(netdev->dev_addr, hw->mac.perm_addr, netdev->addr_len);
 #ifdef ETHTOOL_GPERMADDR
 	memcpy(netdev->perm_addr, hw->mac.perm_addr, netdev->addr_len);
@@ -9448,8 +10053,17 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 		goto err_sw_init;
 	}
 #endif
+#ifdef IXGBE_WFS
+    memcpy(&adapter->mac_table[0].addr, hw->mac.perm_addr,
+           netdev->addr_len);
+    } else {
+    memcpy(&adapter->mac_table[0].addr, iwa->mac_addr,
+           netdev->addr_len);
+    }
+#else
 	memcpy(&adapter->mac_table[0].addr, hw->mac.perm_addr,
 	       netdev->addr_len);
+#endif
 	adapter->mac_table[0].queue = VMDQ_P(0);
 	adapter->mac_table[0].state = (IXGBE_MAC_STATE_DEFAULT |
 				       IXGBE_MAC_STATE_IN_USE);
@@ -9533,12 +10147,16 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 		if (hw->mac.ops.get_bus_info)
 			hw->mac.ops.get_bus_info(hw);
 
+#ifdef IXGBE_WFS
+	adapter->netdev_registered = false;
+#else
 	strcpy(netdev->name, "eth%d");
 	err = register_netdev(netdev);
 	if (err)
 		goto err_register;
 
 	adapter->netdev_registered = true;
+#endif
 
 	/* power down the optics for 82599 SFP+ fiber */
 	if (hw->mac.ops.disable_tx_laser)
@@ -9591,11 +10209,19 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 	if (err)
 		strncpy(part_str, "Unknown", IXGBE_PBANUM_LENGTH);
 	if (ixgbe_is_sfp(hw) && hw->phy.sfp_type != ixgbe_sfp_type_not_present)
+#ifdef IXGBE_WFS
+		log_info("MAC: %d, PHY: %d, SFP+: %d, PBA No: %s\n",
+		       hw->mac.type, hw->phy.type, hw->phy.sfp_type, part_str);
+	else
+		log_info("MAC: %d, PHY: %d, PBA No: %s\n",
+		      hw->mac.type, hw->phy.type, part_str);
+#else	
 		e_info(probe, "MAC: %d, PHY: %d, SFP+: %d, PBA No: %s\n",
 		       hw->mac.type, hw->phy.type, hw->phy.sfp_type, part_str);
 	else
 		e_info(probe, "MAC: %d, PHY: %d, PBA No: %s\n",
 		      hw->mac.type, hw->phy.type, part_str);
+#endif
 
 	e_dev_info("%02x:%02x:%02x:%02x:%02x:%02x\n",
 		   netdev->dev_addr[0], netdev->dev_addr[1],
@@ -9631,7 +10257,11 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 
 	BUG_ON(i_s_var > (info_string + INFO_STRING_LEN));
 	/* end features printing */
+#ifdef IXGBE_WFS
+	log_info("%s\n", info_string);
+#else
 	e_info(probe, "%s\n", info_string);
+#endif
 	kfree(info_string);
 no_info_string:
 #ifdef CONFIG_PCI_IOV
@@ -9651,7 +10281,11 @@ no_info_string:
 	ixgbe_add_sanmac_netdev(netdev);
 
 #endif /* (HAVE_NETDEV_STORAGE_ADDRESS) && (NETDEV_HW_ADDR_T_SAN) */
+#ifdef IXGBE_WFS
+	log_info("Intel(R) 10 Gigabit Network Connection %04x-%d\n", iwa->dev_id, adapter->wfs_port);
+#else
 	e_info(probe, "Intel(R) 10 Gigabit Network Connection\n");
+#endif
 	cards_found++;
 
 #ifdef IXGBE_SYSFS
@@ -9673,12 +10307,28 @@ no_info_string:
 		hw->mac.ops.setup_link(hw,
 			IXGBE_LINK_SPEED_10GB_FULL | IXGBE_LINK_SPEED_1GB_FULL,
 			true);
+			
+#ifdef IXGBE_WFS
+	if (is_primary) {
+        iwa->ndev = netdev;
+	    iwa->primary = adapter;
+	    iwa->state = partial_initialized;
+	    memcpy(iwa->mac_addr, netdev->dev_addr, netdev->addr_len);
+	} else {
+        iwa->secondary = adapter;
+        iwa->primary->wfs_next = iwa->primary->wfs_other = adapter;
+        adapter->wfs_other = iwa->primary;
+	    iwa->state = initialized;
+	}
+#endif
 
 	return 0;
 
+#ifndef IXGBE_WFS
 err_register:
 	ixgbe_clear_interrupt_scheme(adapter);
 	ixgbe_release_hw_control(adapter);
+#endif
 err_sw_init:
 #ifdef CONFIG_PCI_IOV
 	ixgbe_disable_sriov(adapter);
@@ -9686,17 +10336,92 @@ err_sw_init:
 	adapter->flags2 &= ~IXGBE_FLAG2_SEARCH_FOR_SFP;
 	kfree(adapter->mac_table);
 	iounmap(adapter->io_addr);
+#ifdef IXGBE_WFS
+    if (!is_primary) {
+#ifdef CONFIG_PCI_IOV
+        ixgbe_disable_sriov(iwa->primary);
+#endif /* CONFIG_PCI_IOV */
+        iwa->primary->flags2 &= ~IXGBE_FLAG2_SEARCH_FOR_SFP;
+        kfree(iwa->primary->mac_table);
+        iounmap(iwa->primary->hw.hw_addr);
+    }
+#endif
 err_ioremap:
+#ifdef IXGBE_WFS
+    if (!is_primary)
+#endif
 	free_netdev(netdev);
 err_alloc_etherdev:
 	pci_release_selected_regions(pdev,
 				     pci_select_bars(pdev, IORESOURCE_MEM));
+#ifdef IXGBE_WFS
+    if (!is_primary)
+        pci_release_selected_regions(iwa->primary->pdev,
+ 			pci_select_bars(iwa->primary->pdev, IORESOURCE_MEM));
+#endif
 err_pci_reg:
 err_dma:
 	if (!test_and_set_bit(__IXGBE_DISABLED, &adapter->state))
 		pci_disable_device(pdev);
+#ifdef IXGBE_WFS
+    if (!is_primary)
+        pci_disable_device(iwa->primary->pdev);
+#endif
 	return err;
 }
+
+#ifdef IXGBE_WFS
+/**
+ * ixgbe_probe - Device Initialization Routine
+ * @pdev: PCI device information struct
+ * @ent: entry in ixgbe_pci_tbl
+ *
+ * Returns 0 on success, negative on failure
+ *
+ * ixgbe_probe initializes an adapter identified by a pci_dev structure.
+ * The OS initialization, configuring of the adapter private structure,
+ * and a hardware reset occur.
+ **/
+static void __devexit ixgbe_wfs_remove(struct ixgbe_wfs_adapter *iwa, struct pci_dev *pdev);
+static int __devinit ixgbe_probe(struct pci_dev *pdev,
+                 const struct pci_device_id *ent)
+{
+    int err = 0;
+    struct ixgbe_wfs_adapter *iwa;
+
+    iwa = ixgbe_wfs_get_adapter(WFS_DEVID(pdev));
+    if (!iwa || iwa->state == initialized)
+	    return -EIO;
+
+    log_warn("probe PCI %02x:%02x.%d\n",
+            pdev->bus->number, pdev->devfn & ~0x7, pdev->devfn & 0x7);
+
+    if (iwa->state == allocated)
+        err = ixgbe_wfs_init(iwa);
+
+    err = ixgbe_wfs_probe(iwa, pdev, ent);
+
+    if (iwa->state == initialized) {
+        /* now register netdev */
+        strcpy(iwa->ndev->name, WFS_DEVNAME_FMT);
+        err = register_netdev(iwa->ndev);
+        if (err) {
+            if (iwa->primary)
+                ixgbe_wfs_remove(iwa, iwa->primary->pdev);
+            if (iwa->secondary)
+                ixgbe_wfs_remove(iwa, iwa->secondary->pdev);
+        } else {
+            iwa->primary->netdev_registered = iwa->secondary->netdev_registered = true;
+            strcpy(iwa->name, iwa->ndev->name);
+        }
+#ifdef WFS_IOC
+        err = ixgbe_wfs_init2(iwa);
+#endif
+    }
+
+    return err;
+}
+#endif /* IXGBE_WFS */
 
 /**
  * ixgbe_remove - Device Removal Routine
@@ -9707,7 +10432,11 @@ err_dma:
  * Hot-Plug event, or because the driver is going to be removed from
  * memory.
  **/
+#ifdef IXGBE_WFS
+static void __devexit ixgbe_wfs_remove(struct ixgbe_wfs_adapter *iwa, struct pci_dev *pdev)
+#else
 static void __devexit ixgbe_remove(struct pci_dev *pdev)
+#endif
 {
 	struct ixgbe_adapter *adapter = pci_get_drvdata(pdev);
 	struct net_device *netdev = adapter->netdev;
@@ -9742,7 +10471,9 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 
 #endif /* (HAVE_NETDEV_STORAGE_ADDRESS) && (NETDEV_HW_ADDR_T_SAN) */
 	if (adapter->netdev_registered) {
+#ifndef IXGBE_WFS
 		unregister_netdev(netdev);
+#endif
 		adapter->netdev_registered = false;
 	}
 
@@ -9769,7 +10500,17 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 				     pci_select_bars(pdev, IORESOURCE_MEM));
 
 	kfree(adapter->mac_table);
+#ifndef IXGBE_WFS
 	free_netdev(netdev);
+#else
+	if (adapter->is_wfs_primary) {
+	    iwa->primary = NULL;
+	    iwa->state = partial_initialized;
+	} else {
+	    iwa->secondary = NULL;
+        iwa->state = unused;
+	}
+#endif
 
 	pci_disable_pcie_error_reporting(pdev);
 
@@ -9802,6 +10543,40 @@ u16 ixgbe_read_pci_cfg_word(struct ixgbe_hw *hw, u32 reg)
 		return IXGBE_FAILED_READ_CFG_WORD;
 	return value;
 }
+
+#ifdef IXGBE_WFS
+/**
+ * ixgbe_remove - Device Removal Routine
+ * @pdev: PCI device information struct
+ *
+ * ixgbe_remove is called by the PCI subsystem to alert the driver
+ * that it should release a PCI device.  The could be caused by a
+ * Hot-Plug event, or because the driver is going to be removed from
+ * memory.
+ **/
+static void __devexit ixgbe_remove(struct pci_dev *pdev)
+{
+    struct ixgbe_adapter *adapter = pci_get_drvdata(pdev);
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+
+    log_debug("remove\n");
+
+    log_warn("remove wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
+
+    if (iwa->state == opened) {
+        unregister_netdev(iwa->ndev);
+        free_netdev(iwa->ndev);
+        iwa->ndev = NULL;
+        iwa->primary->netdev_registered = iwa->secondary->netdev_registered = false;
+    }
+
+    ixgbe_wfs_remove(iwa, pdev);
+
+    if (iwa->state == unused) {
+        ixgbe_wfs_cleanup(iwa);
+    }
+}
+#endif /* IXGBE_WFS */
 
 #ifdef HAVE_PCI_ERS
 #ifdef CONFIG_PCI_IOV
@@ -10091,8 +10866,10 @@ static int __init ixgbe_init_module(void)
 	int ret;
 	pr_info("%s - version %s\n", ixgbe_driver_string, ixgbe_driver_version);
 	pr_info("%s\n", ixgbe_copyright);
-
-
+#ifdef IXGBE_WFS
+    pr_info("%s - version %s build %s %s\n", ixgbe_wfs_driver_string, ixgbe_wfs_driver_version, __DATE__, __TIME__);
+    pr_info("%s\n", ixgbe_wfs_copyright);
+#endif
 #ifdef IXGBE_PROCFS
 	if (ixgbe_procfs_topdir_init())
 		pr_info("Procfs failed to initialize topdir\n");

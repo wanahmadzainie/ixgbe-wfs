@@ -23,6 +23,10 @@
 
 ###########################################################################
 # Driver files
+#
+# set WFS_MODE = 1 to eanble RING mode
+WFS_MODE = 1
+
 
 # core driver files
 CFILES = ixgbe_main.c ixgbe_common.c ixgbe_api.c ixgbe_param.c \
@@ -49,8 +53,20 @@ ifeq (,$(BUILD_KERNEL))
 BUILD_KERNEL=$(shell uname -r)
 endif
 
+ifeq ($(WFS_MODE),1)
+HOSTNAME=$(shell uname -n)
+EXTRA_CFLAGS += -DIXGBE_WFS -g  
+CFILES += ixgbe_wfs.c ixgbe_wfs_fib.c ixgbe_wfs_raps.c ixgbe_wfs_ioc.c \
+		  ixgbe_wfs_bert.c
+HFILES += ixgbe_wfs.h ixgbe_wfs_fib.h ixgbe_wfs_raps.h ixgbe_wfs_ioc.h \
+		  ixgbe_wfsctl.h ixgbe_wfs_bert.h
+endif
+
 DRIVER_NAME=ixgbe
 
+# IXGBE_WFS_DEBUG to enable WFS debug log code
+# debug level IXGBE_WFS_DEBUGLEVEL=KERN_{ERR(1)|WARNING(2)|INFO(3)|DEBUG(4)}
+EXTRA_CFLAGS += -DIXGBE_WFS_DEBUG -DIXGBE_WFS_DEBUGLEVEL=3
 
 ###########################################################################
 # Environment tests
@@ -157,7 +173,7 @@ EXTRA_CFLAGS += -DDRIVER_NAME=$(DRIVER_NAME)
 EXTRA_CFLAGS += -DDRIVER_NAME_CAPS=$(shell echo $(DRIVER_NAME) | tr '[a-z]' '[A-Z]')
 # standard flags for module builds
 EXTRA_CFLAGS += -DLINUX -D__KERNEL__ -DMODULE -O2 -pipe -Wall
-EXTRA_CFLAGS += -I$(KSRC)/include
+EXTRA_CFLAGS += -I$(KSRC)/include -I.
 EXTRA_CFLAGS += $(shell [ -f $(KSRC)/include/linux/modversions.h ] && \
             echo "-DMODVERSIONS -DEXPORT_SYMTAB \
                   -include $(KSRC)/include/linux/modversions.h")
@@ -333,6 +349,8 @@ endif
 DEPVER := $(shell /sbin/depmod -V 2>/dev/null | \
           awk 'BEGIN {FS="."} NR==1 {print $$2}')
 
+MODPROBE_FILE := /etc/modprobe.d/$(DRIVER_NAME).conf
+
 ###########################################################################
 # Build rules
 
@@ -344,6 +362,9 @@ install: default $(MANFILE).gz
 	find $(INSTALL_MOD_PATH)/lib/modules/$(KVER) -name $(TARGET) -exec rm -f {} \; || true
 	find $(INSTALL_MOD_PATH)/lib/modules/$(KVER) -name $(TARGET).gz -exec rm -f {} \; || true
 	install -D -m 644 $(TARGET) $(INSTALL_MOD_PATH)$(INSTDIR)/$(TARGET)
+ifeq (,$(wildcard $(MODPROBE_FILE)))
+	echo options $(DRIVER_NAME) WfsId=1 > $(MODPROBE_FILE) || true
+endif
 ifeq (,$(INSTALL_MOD_PATH))
 	/sbin/depmod -a || true
 else
@@ -355,6 +376,24 @@ else
 endif
 	install -D -m 644 $(MANFILE).gz $(INSTALL_MOD_PATH)$(MANDIR)/man$(MANSECTION)/$(MANFILE).gz
 	man -c -P'cat > /dev/null' $(MANFILE:.$(MANSECTION)=) || true
+	
+module_install: $(TARGET)
+	# remove all old versions of the driver
+	find $(INSTALL_MOD_PATH)/lib/modules/$(KVER) -name $(TARGET) -exec rm -f {} \; || true
+	find $(INSTALL_MOD_PATH)/lib/modules/$(KVER) -name $(TARGET).gz -exec rm -f {} \; || true
+	install -D -m 644 $(TARGET) $(INSTALL_MOD_PATH)$(INSTDIR)/$(TARGET)
+ifeq (,$(wildcard $(MODPROBE_FILE)))
+	echo options $(DRIVER_NAME) WfsId=1 > $(MODPROBE_FILE) || true
+endif
+ifeq (,$(INSTALL_MOD_PATH))
+	/sbin/depmod -a || true
+else
+  ifeq ($(DEPVER),1 )
+	/sbin/depmod -r $(INSTALL_MOD_PATH) -a || true
+  else
+	/sbin/depmod -b $(INSTALL_MOD_PATH) -a -n $(KVERSION) > /dev/null || true
+  endif
+endif
 
 uninstall:
 	if [ -e $(INSTDIR)/$(TARGET) ] ; then \

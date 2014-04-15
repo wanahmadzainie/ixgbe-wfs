@@ -25,6 +25,9 @@
 #include <linux/module.h>
 
 #include "ixgbe.h"
+#ifdef IXGBE_WFS
+#include "ixgbe_wfs.h"
+#endif
 
 /* This is the only thing that needs to be changed to adjust the
  * maximum number of ports that the driver can manage.
@@ -318,6 +321,20 @@ IXGBE_PARAM(LRO, "Large Receive Offload (0,1), default 1 = on");
  */
 IXGBE_PARAM(allow_unsupported_sfp, "Allow unsupported and untested "
 	    "SFP+ modules on 82599 based adapters, default 0 = Disable");
+
+#ifdef IXGBE_WFS
+/* Workflow Station Identifier
+ *
+ * Valid Range: WFSID_MIN(1) - WFSID_MAX(8)
+ *
+ * Default Value: WFSID_MIN(1)
+ */
+IXGBE_PARAM(WfsId, "Workstation Identifier, range 1..8, default 1");
+
+#define DEFAULT_WFSID       1
+#define MAX_WFSID           WFSID_MAX
+#define MIN_WFSID           WFSID_MIN
+#endif /* IXGBE_WFS */
 
 struct ixgbe_option {
 	enum { enable_option, range_option, list_option } type;
@@ -1094,4 +1111,31 @@ void __devinit ixgbe_check_options(struct ixgbe_adapter *adapter)
 		}
 #endif
 	}
+#ifdef IXGBE_WFS
+    { /* Workstation Identifier (WfsId) */
+        static struct ixgbe_option opt = {
+            .type = range_option,
+            .name = "Workstation Identifier (WfsId)",
+            .err  = "using default.",
+            .def  = WFSID_MIN,
+            .arg  = { .r = { .min = MIN_WFSID,
+                     .max = MAX_WFSID} }
+        };
+        unsigned int id = WfsId[adapter->wfs_parent->index];
+
+        if (!adapter->is_wfs_primary)
+            return;
+#ifdef module_param_array
+        if (num_WfsId > adapter->wfs_parent->index) {
+#endif
+            ixgbe_validate_option(&id, &opt);
+            if (!id) {
+                id = opt.def;
+            }
+            adapter->wfs_parent->wfs_id = id;
+#ifdef module_param_array
+        }
+#endif
+    }
+#endif
 }
