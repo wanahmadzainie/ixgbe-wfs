@@ -68,6 +68,10 @@ DRIVER_NAME=ixgbe
 # debug level IXGBE_WFS_DEBUGLEVEL=KERN_{ERR(1)|WARNING(2)|INFO(3)|DEBUG(4)}
 EXTRA_CFLAGS += -DIXGBE_WFS_DEBUG -DIXGBE_WFS_DEBUGLEVEL=3
 
+ifeq ($(WFS_MODE),1)
+CFLAGS_EXTRA=-DIXGBE_NO_LRO -DIXGBE_ENABLE_VF_MQ
+endif
+
 ###########################################################################
 # Environment tests
 

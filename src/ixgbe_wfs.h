@@ -87,6 +87,7 @@ struct ixgbe_wfs_adapter {
     struct net_device *ndev;
     bool link_up;
     spinlock_t xmit_lock;
+    u32 xmit_err;
 #ifdef WFS_DATASEQ
     u32 data_seqno;
 #endif

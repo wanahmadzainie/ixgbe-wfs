@@ -339,8 +339,10 @@ void ixgbe_wfs_send_announce(struct ixgbe_wfs_adapter *iwa)
 #endif
         rc = ixgbe_xmit_wfs_frame(skb, adapter);
         if (rc != NETDEV_TX_OK) {
-            log_err("sent announce len %d to port %d failed %d\n",
+            if ((iwa->xmit_err%1000) == 0)
+                log_warn("sent announce len %d to port %d failed %d\n",
                     wfspkt->len, adapter->wfs_port, rc);
+            dev_kfree_skb_any(skb);
         } else {
             log_debug("port %d sent announce (%s) len %d \n",
                 adapter->wfs_port,
@@ -386,8 +388,10 @@ void ixgbe_wfs_send_raps(struct ixgbe_wfs_adapter *iwa, wfs_fsm_event event)
 #endif
         rc = ixgbe_xmit_wfs_frame(skb, adapter);
         if (rc != NETDEV_TX_OK) {
-            log_err("sent raps len %d to port %d failed %d\n",
+            if ((iwa->xmit_err%1000) == 0)
+                log_warn("sent raps len %d to port %d failed %d\n",
                     wfspkt->len, adapter->wfs_port, rc);
+            dev_kfree_skb_any(skb);
         } else {
             log_debug("port %d sent raps (%s) len %d \n",
                 adapter->wfs_port, (event==E_rapsSF) ? "SF" : "NR", wfspkt->len);
@@ -557,8 +561,10 @@ void ixgbe_wfs_send_bert(struct ixgbe_wfs_adapter *iwa, u8 wfsid)
 #endif
     rc = ixgbe_xmit_wfs_frame(skb, adapter);
     if (rc != NETDEV_TX_OK) {
-        log_err("sent BERT len %d to port %d failed %d\n",
+        if ((iwa->xmit_err%1000) == 0)
+            log_warn("sent BERT len %d to port %d failed %d\n",
                 wfspkt->len, adapter->wfs_port, rc);
+        dev_kfree_skb_any(skb);
     } else {
         if (wfsopt->val.bert.type == WFSOPT_BERT_REQUEST) {
             bertcfg->stats.tx_pkts++;

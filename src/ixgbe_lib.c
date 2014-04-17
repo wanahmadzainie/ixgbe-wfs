@@ -756,14 +756,17 @@ static void ixgbe_set_num_queues(struct ixgbe_adapter *adapter)
 	/* Start with base case */
 	adapter->num_rx_queues = 1;
 	adapter->num_tx_queues = 1;
-#ifdef IXGBE_WFS
+
+#if defined(IXGBE_WFS) && defined(HAVE_TX_MQ)
 	adapter->num_rx_queues++;
-	adapter->num_rx_queues++;
+	adapter->num_tx_queues++;
 #endif
+
 	adapter->num_rx_pools = adapter->num_rx_queues;
 	adapter->num_rx_queues_per_pool = 1;
 
 #ifdef HAVE_TX_MQ
+
 	if (ixgbe_set_dcb_vmdq_queues(adapter))
 		return;
 

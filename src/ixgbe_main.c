@@ -621,9 +621,15 @@ struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	int i;
 #ifdef IXGBE_WFS
 	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+	bool fake_tx_hang = false;
 #endif
 
+#ifdef IXGBE_WFS
+#define TX_TIMEO_LIMIT (160 * HZ)
+#else
 #define TX_TIMEO_LIMIT 16000
+#endif
+
 #ifdef IXGBE_WFS
 	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
 	    real_tx_hang = false;
@@ -632,25 +638,34 @@ struct ixgbe_adapter *adapter = netdev_priv(netdev);
 		struct ixgbe_ring *tx_ring = adapter->tx_ring[i];
 		if (check_for_tx_hang(tx_ring) && ixgbe_check_tx_hang(tx_ring))
 			real_tx_hang = true;
+#ifdef IXGBE_WFS
+		else
+		    fake_tx_hang = true;
+#endif
 	}
 
 	if (real_tx_hang) {
 		ixgbe_tx_timeout_reset(adapter);
-	} else {
-#ifdef IXGBE_WFS
-        log_warn("Fake Tx hang detected with timeout of %d seconds\n",
-            netdev->watchdog_timeo/HZ);
-#else
+#ifndef IXGBE_WFS
+    } else {
 		e_info(drv, "Fake Tx hang detected with timeout of %d "
 			"seconds\n", netdev->watchdog_timeo/HZ);
-#endif
 
 		/* fake Tx hang - increase the kernel timeout */
-		if (netdev->watchdog_timeo < TX_TIMEO_LIMIT)
-			netdev->watchdog_timeo *= 2;
-	}
+        if (netdev->watchdog_timeo < TX_TIMEO_LIMIT)
+            netdev->watchdog_timeo *= 2;
+#endif
+    }
+
 #ifdef IXGBE_WFS
     }
+	if (fake_tx_hang) {
+	    log_warn("Fake Tx hang detected with timeout of %d "
+	            "seconds\n", netdev->watchdog_timeo/HZ);
+        /* fake Tx hang - increase the kernel timeout */
+        if (netdev->watchdog_timeo < TX_TIMEO_LIMIT)
+            netdev->watchdog_timeo *= 2;
+	 }
 #endif
 }
 
@@ -1903,7 +1918,7 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
 	struct ixgbe_adapter *adapter = rx_ring->q_vector->adapter;
 	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
 	struct wfspkt *wfspkt;
-	netdev_tx_t xmit_err;
+	netdev_tx_t rc;
 #endif
 
 	ixgbe_update_rsc_stats(rx_ring, skb);
@@ -1942,21 +1957,20 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
         adapter->wfs_other->link_up)
     {
         struct sk_buff *nskb = skb_copy(skb, GFP_ATOMIC);
-        static u32 fwd_err = 0;
 
         if (!nskb) {
             log_err("allocating forwarding buffer failed\n");
         } else {
 #ifdef HAVE_TX_MQ
-            nskb->queue_mapping = (nskb->queue_mapping+1) % adapter->num_tx_queues;
+            nskb->queue_mapping = (nskb->queue_mapping+1) % adapter->wfs_other->num_tx_queues;
 #endif
-            xmit_err = ixgbe_xmit_wfs_frame(nskb, adapter->wfs_other);
-            if (xmit_err != NETDEV_TX_OK) {
+	        rc = ixgbe_xmit_wfs_frame(nskb, adapter->wfs_other);
+            if (rc != NETDEV_TX_OK) {
                 /* reduce error message output */
-                if ((++fwd_err%1000) == 0)
-                log_err("forward %s packet len %d to port %d failed %d, packet dropped.\n",
+                //if ((iwa->xmit_err%1000) == 0)
+                    log_warn("forward %s packet len %d to port %d failed 0x%x, packet dropped.\n",
                     (wfspkt->type & WFSPKT_TYPE_CTRL_MASK) ? "ctrl" : "data",
-                    skb->len, adapter->wfs_other->wfs_port, xmit_err);
+                    skb->len, adapter->wfs_other->wfs_port, rc);
                 dev_kfree_skb_any(nskb);
             } else {
                 log_debug("forward %s packet len %d to port %d\n",
@@ -1988,10 +2002,12 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
         /* sent local RAPS to next channel */
         else if (wfspkt->type == WFSPKT_TYPE_CTRL_RAPS && adapter->wfs_other->link_up)
         {
-            xmit_err = ixgbe_xmit_wfs_frame(skb, adapter->wfs_other);
-            if (xmit_err != NETDEV_TX_OK) {
-                log_err("sent (triggered) raps len %d to port %d failed %d\n",
-                        skb->len, adapter->wfs_other->wfs_port, xmit_err);
+            rc = ixgbe_xmit_wfs_frame(skb, adapter->wfs_other);
+            if (rc != NETDEV_TX_OK) {
+                /* reduce error message output */
+                //if ((iwa->xmit_err%1000) == 0)
+                    log_warn("sent (triggered) raps len %d to port %d failed 0x%x\n",
+                        skb->len, adapter->wfs_other->wfs_port, rc);
                 dev_kfree_skb_any(skb);
             } else {
                 log_debug("sent (triggered) raps len %d to port %d\n",
@@ -2002,10 +2018,12 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
         /* BERT response to same channel to guarantee reachability */
         else if (wfspkt->type == WFSPKT_TYPE_CTRL_BERT && adapter->link_up)
         {
-            xmit_err = ixgbe_xmit_wfs_frame(skb, adapter);
-            if (xmit_err != NETDEV_TX_OK) {
-                log_err("sent BERT response len %d to port %d failed %d\n",
-                        skb->len, adapter->wfs_port, xmit_err);
+            rc = ixgbe_xmit_wfs_frame(skb, adapter);
+            if (rc != NETDEV_TX_OK) {
+                /* reduce error message output */
+                //if ((iwa->xmit_err%1000) == 0)
+                    log_warn("sent BERT response len %d to port %d failed 0x%x\n",
+                        skb->len, adapter->wfs_port, rc);
                 dev_kfree_skb_any(skb);
             } else {
                 log_debug("sent BERT response len %d to port %d\n",
@@ -2556,8 +2574,10 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 #ifdef IXGBE_WFS
 		log_debug("Rx skb len %d head_len %d, data_len %d nr_frag %d\n",
                 skb->len, skb_headlen(skb), skb->data_len, skb_shinfo(skb)->nr_frags);
-		if (!ixgbe_process_skb_fields(rx_ring, rx_desc, skb))
+		if (!ixgbe_process_skb_fields(rx_ring, rx_desc, skb)) {
+		    total_rx_packets++;
 		    continue;
+		}
 #else
 		ixgbe_process_skb_fields(rx_ring, rx_desc, skb);
 #endif
@@ -2659,6 +2679,9 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		if (!ixgbe_test_staterr(rx_desc, IXGBE_RXD_STAT_DD))
 			break;
 
+#ifdef IXGBE_WFS
+        log_debug("Rx get rx_desc\n");
+#endif
 		/*
 		 * This memory barrier is needed to keep us from reading
 		 * any other fields out of the rx_desc until we know the
@@ -2723,7 +2746,14 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		total_rx_bytes += skb->len;
 
 		/* populate checksum, timestamp, VLAN, and protocol */
+#ifdef IXGBE_WFS
+        log_debug("Rx skb len %d head_len %d, data_len %d nr_frag %d\n",
+                skb->len, skb_headlen(skb), skb->data_len, skb_shinfo(skb)->nr_frags);
+        if (!ixgbe_process_skb_fields(rx_ring, rx_desc, skb))
+            continue;
+#else
 		ixgbe_process_skb_fields(rx_ring, rx_desc, skb);
+#endif
 
 #ifdef IXGBE_FCOE
 		/* if ddp, not passing to ULD unless for FCP_RSP or error */
@@ -7623,16 +7653,19 @@ static void ixgbe_watchdog_link_is_up(struct ixgbe_adapter *adapter)
 	       ((flow_rx && flow_tx) ? "RX/TX" :
 	       (flow_rx ? "RX" :
 	       (flow_tx ? "TX" : "None"))));
+
 #ifdef IXGBE_WFS
 	if (!iwa->link_up) {
 	    iwa->link_up = true;
 	    log_info("%s Link Up\n", iwa->name);
 #endif
+
 	netif_carrier_on(netdev);
+
 #ifdef IXGBE_WFS
 	}
-    if (adapter->wfs_other->link_up) /* both link up, send E_clear_localSF */
-        ixgbe_wfs_fsm_set_event(iwa, WFSID_ALL, E_clear_localSF, 0);
+	if (adapter->wfs_other->link_up) /* both link up, send E_clear_localSF */
+	    ixgbe_wfs_fsm_set_event(iwa, WFSID_ALL, E_clear_localSF, 0);
 #endif
 
 #ifdef IFLA_VF_MAX
@@ -7689,8 +7722,10 @@ static void ixgbe_watchdog_link_is_down(struct ixgbe_adapter *adapter)
 	    iwa->link_up = false;
 	    log_info("%s Link Down\n", iwa->name);
 #endif
+
 	netif_carrier_off(netdev);
 	netif_tx_stop_all_queues(netdev);
+
 #ifdef IXGBE_WFS
 	}
     ixgbe_wfs_fsm_set_event(iwa, WFSID_ALL, E_localSF, 0);
@@ -8737,7 +8772,7 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 #endif
 #ifdef IXGBE_WFS
     struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
-	netdev_tx_t err;
+    netdev_tx_t rc;
 #endif
 	/*
 	 * The minimum packet size for olinfo paylen is 17 so pad the skb
@@ -8762,10 +8797,10 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 #endif
 
 #ifdef IXGBE_WFS
-	err = ixgbe_xmit_frame_ring(skb, adapter, tx_ring);
+	if ((rc = ixgbe_xmit_frame_ring(skb, adapter, tx_ring)) != NETDEV_TX_OK)
+        iwa->xmit_err++;
     spin_unlock_bh(&iwa->xmit_lock);
-
-    return err;
+    return rc;
 #else
 	return ixgbe_xmit_frame_ring(skb, adapter, tx_ring);
 #endif
@@ -8779,6 +8814,9 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
     struct ixgbe_adapter *adapter = netdev_priv(netdev);
     struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
     struct wfspkt *wfspkt;
+    struct sk_buff *nskb = NULL;
+
+    log_debug("Enter, skb_len %d\n", skb->len);
 
     if (iwa->state != opened || !iwa->link_up) {
         log_debug("not in open state or both links down, skb drop\n");
@@ -8798,9 +8836,12 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
     wfspkt = (struct wfspkt *)skb->data;
 
     /* determine egress adapter */
-    if (wfspkt->dest == WFSID_ALL)
-        adapter = iwa->primary->link_up ? iwa->primary : iwa->secondary->link_up ? iwa->secondary : NULL;
-    else if (iwa->wfspeer[wfspkt->dest-1].fsm_state == S_idle)
+    if (wfspkt->dest == WFSID_ALL) {
+        adapter = iwa->primary;
+        nskb = skb_copy(skb, GFP_ATOMIC);
+        if (!nskb)
+            log_err("allocating forwarding buffer failed\n");
+    } else if (iwa->wfspeer[wfspkt->dest-1].fsm_state == S_idle)
         adapter = iwa->wfspeer[wfspkt->dest-1].channel_pri;
     else if (iwa->wfspeer[wfspkt->dest-1].fsm_state == S_protect)
         adapter = iwa->wfspeer[wfspkt->dest-1].channel_sec;
@@ -8813,23 +8854,36 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
         return NETDEV_TX_OK;
     }
 
-    skb_get(skb);
-    rc = ixgbe_xmit_wfs_frame(skb, adapter);
-    if (rc != NETDEV_TX_OK) {
+    if (!adapter->link_up) {
         dev_kfree_skb_any(skb);
-        return rc;
-    }
-
-    if (wfspkt->dest == WFSID_ALL && adapter->wfs_other->link_up) {
-        skb_get(skb);
-        rc = ixgbe_xmit_wfs_frame(skb, adapter->wfs_other);
+    } else {
+        rc = ixgbe_xmit_wfs_frame(skb, adapter);
         if (rc != NETDEV_TX_OK) {
+            //if ((iwa->xmit_err%1000) == 0)
+                log_warn("sent data len %d to port %d failed 0x%x\n",
+                        skb->len, adapter->wfs_port, rc);
             dev_kfree_skb_any(skb);
-            return rc;
+        } else {
+            log_debug("sent data len %d to port %d\n", skb->len, adapter->wfs_port);
         }
     }
 
-    dev_kfree_skb_any(skb);
+    if (nskb) {
+        if (!adapter->wfs_other->link_up) {
+            dev_kfree_skb_any(nskb);
+        } else {
+            rc = ixgbe_xmit_wfs_frame(nskb, adapter->wfs_other);
+            if (rc != NETDEV_TX_OK) {
+            //if ((iwa->xmit_err%1000) == 0)
+                log_warn("sent data len %d to port %d failed 0x%x\n",
+                    skb->len, adapter->wfs_other->wfs_port, rc);
+                dev_kfree_skb_any(nskb);
+            } else {
+                log_debug("sent data len %d to port %d\n", skb->len, adapter->wfs_other->wfs_port);
+            }
+        }
+    }
+
     return NETDEV_TX_OK;
 }
 

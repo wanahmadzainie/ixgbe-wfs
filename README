@@ -1,8 +1,27 @@
+ixgbe Linux* Base Workflow Ring Driver for Intel® Ethernet Network Connection
+==============================================================================
+March 30, 2014
+This is modified version of Intel X540-AT2 (ixgbe) driver for Power-All Networksl® E
+Workflow Project. Two 10Gbps Ethernet ports are combined as members of Workflow RING
+Ethernet port to connecting workstation in a ring network. Spanning Tree (STP) are
+not required in the netowrk as Ring Automatic Protection Switch (RAPS) is implemented
+to provide loop-free connectivity.
+
+Changes described with original driver description followed.
+
+Command Line Parameters
+-----------------------
+
+Workstation ID (WfsId)
+----------------------
+Valid Range:    1-8
+
+Default Value:  1
 
 
 ixgbe Linux* Base Driver for Intel® Ethernet Network Connection
 ===============================================================
-
+(Intel official version 3.21.2 Apr. 2, 2014 release)
 
 ================================================================================
 

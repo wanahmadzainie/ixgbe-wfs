@@ -421,7 +421,11 @@ static int __devinit ixgbe_validate_option(unsigned int *value,
  **/
 void __devinit ixgbe_check_options(struct ixgbe_adapter *adapter)
 {
+#ifdef IXGBE_WFS
+    int bd = adapter->wfs_parent->index;
+#else
 	int bd = adapter->bd_number;
+#endif
 	u32 *aflags = &adapter->flags;
 	struct ixgbe_ring_feature *feature = adapter->ring_feature;
 	unsigned int vmdq;
@@ -1116,26 +1120,26 @@ void __devinit ixgbe_check_options(struct ixgbe_adapter *adapter)
         static struct ixgbe_option opt = {
             .type = range_option,
             .name = "Workstation Identifier (WfsId)",
-            .err  = "using default.",
+            .err  = "using default " __MODULE_STRING(WFSID_MIN),
             .def  = WFSID_MIN,
             .arg  = { .r = { .min = MIN_WFSID,
                      .max = MAX_WFSID} }
         };
-        unsigned int id = WfsId[adapter->wfs_parent->index];
+        unsigned int id = WfsId[bd];
 
         if (!adapter->is_wfs_primary)
             return;
 #ifdef module_param_array
-        if (num_WfsId > adapter->wfs_parent->index) {
+        if (num_WfsId > bd) {
 #endif
             ixgbe_validate_option(&id, &opt);
-            if (!id) {
-                id = opt.def;
-            }
-            adapter->wfs_parent->wfs_id = id;
 #ifdef module_param_array
+        } else {
+            id = opt.def;
+            printk(KERN_WARNING "Missing Workstation Identifier(WfsId) option, using default %d\n", id);
         }
 #endif
+        adapter->wfs_parent->wfs_id = id;
     }
 #endif
 }
