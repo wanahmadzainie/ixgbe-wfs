@@ -36,6 +36,7 @@ static bool wfs_fsm_trans_table_initialized = false;
 #define myIP            (iwa->ip)
 #define raps_timer      (iwa->raps_timer)
 #define raps_ctrl       (iwa->raps_ctrl)
+#define raps_lock       (iwa->raps_lock)
 #define fsm_lock        (iwa->fsm_lock)
 #define wfspeer         (iwa->wfspeer)
 #define fsmEvBufs       (iwa->fsmEvBufs)
@@ -650,6 +651,7 @@ static void raps_main(unsigned long data)
 {
     struct ixgbe_wfs_adapter *iwa = (struct ixgbe_wfs_adapter *)data;
 
+    spin_lock_bh(&raps_lock);
     log_debug("Enter, raps_ctrl.flag = %04x\n", raps_ctrl.flag);
 
     /* process FSM event */
@@ -708,6 +710,7 @@ static void raps_main(unsigned long data)
     raps_timer.expires = jiffies + RAPS_TICK;
     add_timer(&raps_timer);
 
+    spin_unlock_bh(&raps_lock);
 }
 
 /*
@@ -717,6 +720,7 @@ void ixgbe_wfs_raps_start(struct ixgbe_wfs_adapter *iwa)
 {
     /* initialize RAPS control */
     memset(&raps_ctrl, 0, sizeof(struct raps_timer_ctrl));
+    spin_lock_init(&raps_lock);
 
     /* initialize state machine */
     spin_lock_init(&fsm_lock);
@@ -742,7 +746,7 @@ void ixgbe_wfs_raps_start(struct ixgbe_wfs_adapter *iwa)
     /* kick off local */
     ixgbe_wfs_fsm_set_event(iwa, myID, E_discover, 0);
 
-    /* Set up Workstation timer. */
+    /* Fire RAPS engine */
     raps_timer.expires = jiffies + RAPS_TICK;
     raps_timer.data = (unsigned long)iwa;
     raps_timer.function = &raps_main;
@@ -752,5 +756,11 @@ void ixgbe_wfs_raps_start(struct ixgbe_wfs_adapter *iwa)
 
 void ixgbe_wfs_raps_stop(struct ixgbe_wfs_adapter *iwa)
 {
+    /* stop BERT if it's running */
+    ixgbe_wfs_bert_stop_request(iwa);
+
+    /* stop RAPS engine */
+    spin_lock_bh(&raps_lock);
     del_timer_sync(&raps_timer);
+    spin_unlock_bh(&raps_lock);
 }

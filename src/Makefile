@@ -55,7 +55,7 @@ endif
 
 ifeq ($(WFS_MODE),1)
 HOSTNAME=$(shell uname -n)
-EXTRA_CFLAGS += -DIXGBE_WFS -g  
+EXTRA_CFLAGS += -DIXGBE_WFS
 CFILES += ixgbe_wfs.c ixgbe_wfs_fib.c ixgbe_wfs_raps.c ixgbe_wfs_ioc.c \
 		  ixgbe_wfs_bert.c
 HFILES += ixgbe_wfs.h ixgbe_wfs_fib.h ixgbe_wfs_raps.h ixgbe_wfs_ioc.h \
@@ -66,6 +66,7 @@ DRIVER_NAME=ixgbe
 
 # IXGBE_WFS_DEBUG to enable WFS debug log code
 # debug level IXGBE_WFS_DEBUGLEVEL=KERN_{ERR(1)|WARNING(2)|INFO(3)|DEBUG(4)}
+EXTRA_CFLAGS += -g
 EXTRA_CFLAGS += -DIXGBE_WFS_DEBUG -DIXGBE_WFS_DEBUGLEVEL=3
 
 ifeq ($(WFS_MODE),1)

@@ -774,6 +774,7 @@ static void wfs_process_bert(struct ixgbe_wfs_adapter *iwa, struct ixgbe_adapter
 #if 0
     disp_frag((char *)pkt, MIN(60,skb_headlen(skb)));
 #endif
+
     /* calculate size/checksum */
     if ((skb->len - pkt->len) != opt->val.bert.data_len)
         wrong_size = 1;
@@ -788,6 +789,9 @@ static void wfs_process_bert(struct ixgbe_wfs_adapter *iwa, struct ixgbe_adapter
         pkt->type = WFSPKT_TYPE_CTRL_NONE;
 
         bertcfg = &wfsbert[myID-1];
+
+        if (!bertcfg->on)
+            return;
 
         bertcfg->jfs_last = jiffies;
         elapse = ktime_to_us(ktime_get_real()) - opt->val.bert.ts;
@@ -828,12 +832,12 @@ static void wfs_process_bert(struct ixgbe_wfs_adapter *iwa, struct ixgbe_adapter
 
         if (wrong_size) {
             bertcfg->stats.err_size++;
-            log_info("wrong BERT data size len %d expect %d\n",
+            log_warn("wrong BERT data size len %d expect %d\n",
                     skb->len - pkt->len, opt->val.bert.data_len);
         }
 
         if (csum != bertcfg->data_csum || opt->val.bert.data_csum != bertcfg->data_csum) {
-            log_info("wrong csum %04x, expect %04x, calculate %04x",
+            log_warn("wrong csum %04x, expect %04x, calculate %04x",
                     opt->val.bert.data_csum, bertcfg->data_csum, csum);
             bertcfg->stats.err_csum++;
         }
@@ -896,12 +900,12 @@ static void wfs_process_bert(struct ixgbe_wfs_adapter *iwa, struct ixgbe_adapter
 
         if (wrong_size) {
             bertcfg->stats.err_size++;
-            log_info("wrong BERT data len %d expect %d\n",
+            log_warn("wrong BERT data len %d expect %d\n",
                     skb->len - pkt->len, opt->val.bert.data_len);
         }
 
         if (csum != bertcfg->data_csum || opt->val.bert.data_csum != bertcfg->data_csum) {
-            log_info("wrong csum %04x, expect %04x, calculate %04x",
+            log_warn("wrong csum %04x, expect %04x, calculate %04x\n",
                     opt->val.bert.data_csum, bertcfg->data_csum, csum);
             bertcfg->stats.err_csum++;
         }

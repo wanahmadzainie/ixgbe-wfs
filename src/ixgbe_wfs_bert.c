@@ -55,7 +55,7 @@
  *	Global Data
  */
 #define     BERT_TX_INT     1  // msec
-#define     BERT_RX_INT     4  // msec
+#define     BERT_RX_INT     2  // msec
 
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
@@ -131,13 +131,14 @@ static void bert_request_main(struct work_struct *work)
     wk->running = 0;
 
     /* clean up BERT configuration */
+    bertcfg->on = 0;
     bertcfg->data_len = 0;
     bertcfg->data_csum = 0;
     if (bertcfg->skb)
         dev_kfree_skb_any(bertcfg->skb);
     bertcfg->skb = NULL;
 
-    log_debug("BERT workqueue exited\n");
+    log_info("BERT workqueue exited\n");
     return;
 }
 
@@ -153,7 +154,7 @@ int ixgbe_wfs_bert_start_request(struct ixgbe_wfs_adapter *iwa, wfsctl_bert_cfg 
 
     spin_lock(&bert_lock);
 
-    if (myRequest.running) {
+    if (myRequest.on) {
         spin_unlock(&bert_lock);
         return 1;
     }
@@ -181,6 +182,7 @@ int ixgbe_wfs_bert_start_request(struct ixgbe_wfs_adapter *iwa, wfsctl_bert_cfg 
     bertcfg->seqno = 0;
     bertcfg->jfs = bertcfg->jfs_last = 0;
     memset(&bertcfg->stats, 0, sizeof(struct wfs_bert_stats));
+    bertcfg->on = 1;
     kfree(buff);
 
     /* BERT wq control */
@@ -189,19 +191,19 @@ int ixgbe_wfs_bert_start_request(struct ixgbe_wfs_adapter *iwa, wfsctl_bert_cfg 
     myBertSeqNo = 0;
     myRequest.on = 1;
 
-    /* start BERT wq */
-    myRequest.on = 1;
-    INIT_BERT_WORK(&myRequest, bert_request_main);
-    queue_work(request_queue, (struct work_struct *)&myRequest);
+    if (cfg->pkt_pattern_flag == 0) {
+        log_info("BERT set data len %d pattern %02X burst %ld/s csum %04x\n",
+            bertcfg->data_len, cfg->pkt_pattern, myRequest.burst, bertcfg->data_csum);
+    } else {
+        log_info("BERT set data len %d random pattern burst %ld/s csum %04x\n",
+            bertcfg->data_len, myRequest.burst, bertcfg->data_csum);
+    }
 
     spin_unlock(&bert_lock);
 
-    if (cfg->pkt_pattern_flag == 0)
-    log_info("BERT set data len %d pattern %02X burst %ld/s csum %04x\n",
-            bertcfg->data_len, cfg->pkt_pattern, myRequest.burst, bertcfg->data_csum);
-    else
-    log_info("BERT set data len %d random pattern burst %ld/s csum %04x\n",
-            bertcfg->data_len, myRequest.burst, bertcfg->data_csum);
+    /* start BERT wq */
+    INIT_BERT_WORK(&myRequest, bert_request_main);
+    queue_work(request_queue, (struct work_struct *)&myRequest);
 
     return 0;
 }
@@ -218,6 +220,7 @@ void ixgbe_wfs_bert_stop_request(struct ixgbe_wfs_adapter *iwa)
 
 int ixgbe_wfs_bert_init(struct ixgbe_wfs_adapter *iwa)
 {
+    spin_lock_init(&bert_lock);
     request_queue = create_workqueue("ixgbe_wfs_bert");
     if (!request_queue) {
         log_err("BERT request workqueue create failed");
@@ -233,12 +236,8 @@ int ixgbe_wfs_bert_init(struct ixgbe_wfs_adapter *iwa)
 void ixgbe_wfs_bert_cleanup(struct ixgbe_wfs_adapter *iwa)
 {
     ixgbe_wfs_bert_stop_request(iwa);
-
-    spin_lock(&bert_lock);
     flush_workqueue(request_queue);
     destroy_workqueue(request_queue);
-    spin_unlock(&bert_lock);
-
     log_info("BERT workqueue destroyed\n");
 }
 

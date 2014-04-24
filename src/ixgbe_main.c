@@ -1967,10 +1967,10 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
 	        rc = ixgbe_xmit_wfs_frame(nskb, adapter->wfs_other);
             if (rc != NETDEV_TX_OK) {
                 /* reduce error message output */
-                //if ((iwa->xmit_err%1000) == 0)
+                if ((iwa->xmit_err%1000) == 0)
                     log_warn("forward %s packet len %d to port %d failed 0x%x, packet dropped.\n",
-                    (wfspkt->type & WFSPKT_TYPE_CTRL_MASK) ? "ctrl" : "data",
-                    skb->len, adapter->wfs_other->wfs_port, rc);
+                            (wfspkt->type & WFSPKT_TYPE_CTRL_MASK) ? "ctrl" : "data",
+                            skb->len, adapter->wfs_other->wfs_port, rc);
                 dev_kfree_skb_any(nskb);
             } else {
                 log_debug("forward %s packet len %d to port %d\n",
@@ -2005,7 +2005,7 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
             rc = ixgbe_xmit_wfs_frame(skb, adapter->wfs_other);
             if (rc != NETDEV_TX_OK) {
                 /* reduce error message output */
-                //if ((iwa->xmit_err%1000) == 0)
+                if ((iwa->xmit_err%1000) == 0)
                     log_warn("sent (triggered) raps len %d to port %d failed 0x%x\n",
                         skb->len, adapter->wfs_other->wfs_port, rc);
                 dev_kfree_skb_any(skb);
@@ -2021,7 +2021,7 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
             rc = ixgbe_xmit_wfs_frame(skb, adapter);
             if (rc != NETDEV_TX_OK) {
                 /* reduce error message output */
-                //if ((iwa->xmit_err%1000) == 0)
+                if ((iwa->xmit_err%1000) == 0)
                     log_warn("sent BERT response len %d to port %d failed 0x%x\n",
                         skb->len, adapter->wfs_port, rc);
                 dev_kfree_skb_any(skb);
@@ -3457,24 +3457,24 @@ static int ixgbe_request_msix_irqs(struct ixgbe_adapter *adapter)
 		if (q_vector->tx.ring && q_vector->rx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
 #ifdef IXGBE_WFS
-				 "%s.%d-%s-%d", netdev->name, adapter->wfs_port, "TxRx", ri++);
+			"%s.%d-%s-%d", netdev->name, adapter->wfs_port, "TxRx", ri++);
 #else
-			     "%s-%s-%d", netdev->name, "TxRx", ri++);
+			"%s-%s-%d", netdev->name, "TxRx", ri++);
 #endif
 			ti++;
 		} else if (q_vector->rx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
 #ifdef IXGBE_WFS
-				 "%s.%d-%s-%d", netdev->name, adapter->wfs_port, "rx", ri++);
+			"%s.%d-%s-%d", netdev->name, adapter->wfs_port, "rx", ri++);
 #else
-			     "%s-%s-%d", netdev->name, "rx", ri++);
+			"%s-%s-%d", netdev->name, "rx", ri++);
 #endif
 		} else if (q_vector->tx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
 #ifdef IXGBE_WFS
-				 "%s.%d-%s-%d", netdev->name, adapter->wfs_port, "tx", ti++);
+			"%s.%d-%s-%d", netdev->name, adapter->wfs_port, "tx", ti++);
 #else
-                 "%s-%s-%d", netdev->name, "tx", ti++);
+            "%s-%s-%d", netdev->name, "tx", ti++);
 #endif
 		} else {
 			/* skip this unused q_vector */
@@ -7046,7 +7046,7 @@ static void ixgbe_shutdown(struct pci_dev *pdev)
 
 #ifdef IXGBE_WFS
     for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
-        log_warn("wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
+        log_warn("shutdown wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
         pdev = adapter->pdev;
 #endif
 
@@ -8859,7 +8859,7 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
     } else {
         rc = ixgbe_xmit_wfs_frame(skb, adapter);
         if (rc != NETDEV_TX_OK) {
-            //if ((iwa->xmit_err%1000) == 0)
+            if ((iwa->xmit_err%1000) == 0)
                 log_warn("sent data len %d to port %d failed 0x%x\n",
                         skb->len, adapter->wfs_port, rc);
             dev_kfree_skb_any(skb);
@@ -8874,9 +8874,9 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
         } else {
             rc = ixgbe_xmit_wfs_frame(nskb, adapter->wfs_other);
             if (rc != NETDEV_TX_OK) {
-            //if ((iwa->xmit_err%1000) == 0)
-                log_warn("sent data len %d to port %d failed 0x%x\n",
-                    skb->len, adapter->wfs_other->wfs_port, rc);
+                if ((iwa->xmit_err%1000) == 0)
+                    log_warn("sent data len %d to port %d failed 0x%x\n",
+                            skb->len, adapter->wfs_other->wfs_port, rc);
                 dev_kfree_skb_any(nskb);
             } else {
                 log_debug("sent data len %d to port %d\n", skb->len, adapter->wfs_other->wfs_port);
@@ -10559,10 +10559,10 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 #else
 	if (adapter->is_wfs_primary) {
 	    iwa->primary = NULL;
-	    iwa->state = partial_initialized;
+	    iwa->state = unused;
 	} else {
 	    iwa->secondary = NULL;
-        iwa->state = unused;
+        iwa->state = partial_initialized;
 	}
 #endif
 
@@ -10572,35 +10572,9 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 		pci_disable_device(pdev);
 }
 
-static bool ixgbe_check_cfg_remove(struct ixgbe_hw *hw, struct pci_dev *pdev)
-{
-	u16 value;
-
-	pci_read_config_word(pdev, PCI_VENDOR_ID, &value);
-	if (value == IXGBE_FAILED_READ_CFG_WORD) {
-		ixgbe_remove_adapter(hw);
-		return true;
-	}
-	return false;
-}
-
-u16 ixgbe_read_pci_cfg_word(struct ixgbe_hw *hw, u32 reg)
-{
-	struct ixgbe_adapter *adapter = hw->back;
-	u16 value;
-
-	if (IXGBE_REMOVED(hw->hw_addr))
-		return IXGBE_FAILED_READ_CFG_WORD;
-	pci_read_config_word(adapter->pdev, reg, &value);
-	if (value == IXGBE_FAILED_READ_CFG_WORD &&
-	    ixgbe_check_cfg_remove(hw, adapter->pdev))
-		return IXGBE_FAILED_READ_CFG_WORD;
-	return value;
-}
-
 #ifdef IXGBE_WFS
 /**
- * ixgbe_remove - Device Removal Routine
+ * ixgbe_remove - Device Removal Routine (function 1 first)
  * @pdev: PCI device information struct
  *
  * ixgbe_remove is called by the PCI subsystem to alert the driver
@@ -10631,6 +10605,32 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
     }
 }
 #endif /* IXGBE_WFS */
+
+static bool ixgbe_check_cfg_remove(struct ixgbe_hw *hw, struct pci_dev *pdev)
+{
+	u16 value;
+
+	pci_read_config_word(pdev, PCI_VENDOR_ID, &value);
+	if (value == IXGBE_FAILED_READ_CFG_WORD) {
+		ixgbe_remove_adapter(hw);
+		return true;
+	}
+	return false;
+}
+
+u16 ixgbe_read_pci_cfg_word(struct ixgbe_hw *hw, u32 reg)
+{
+	struct ixgbe_adapter *adapter = hw->back;
+	u16 value;
+
+	if (IXGBE_REMOVED(hw->hw_addr))
+		return IXGBE_FAILED_READ_CFG_WORD;
+	pci_read_config_word(adapter->pdev, reg, &value);
+	if (value == IXGBE_FAILED_READ_CFG_WORD &&
+	    ixgbe_check_cfg_remove(hw, adapter->pdev))
+		return IXGBE_FAILED_READ_CFG_WORD;
+	return value;
+}
 
 #ifdef HAVE_PCI_ERS
 #ifdef CONFIG_PCI_IOV

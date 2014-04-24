@@ -93,12 +93,12 @@
 #define IXGBE_DEFAULT_TXD       1024
 #define IXGBE_DEFAULT_TX_WORK       512
 #define IXGBE_MAX_TXD           8192
-#define IXGBE_MIN_TXD           128
+#define IXGBE_MIN_TXD           64
 
 #define IXGBE_DEFAULT_RXD       1024
 #define IXGBE_DEFAULT_RX_WORK       512
-#define IXGBE_MAX_RXD           4096
-#define IXGBE_MIN_RXD           128
+#define IXGBE_MAX_RXD           8192
+#define IXGBE_MIN_RXD           64
 #else
 #define IXGBE_DEFAULT_TXD		512
 #define IXGBE_DEFAULT_TX_WORK		256

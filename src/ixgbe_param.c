@@ -322,7 +322,7 @@ IXGBE_PARAM(LRO, "Large Receive Offload (0,1), default 1 = on");
 IXGBE_PARAM(allow_unsupported_sfp, "Allow unsupported and untested "
 	    "SFP+ modules on 82599 based adapters, default 0 = Disable");
 
-#ifdef IXGBE_WFS
+//#ifdef IXGBE_WFS
 /* Workflow Station Identifier
  *
  * Valid Range: WFSID_MIN(1) - WFSID_MAX(8)
@@ -334,7 +334,7 @@ IXGBE_PARAM(WfsId, "Workstation Identifier, range 1..8, default 1");
 #define DEFAULT_WFSID       1
 #define MAX_WFSID           WFSID_MAX
 #define MIN_WFSID           WFSID_MIN
-#endif /* IXGBE_WFS */
+//#endif /* IXGBE_WFS */
 
 struct ixgbe_option {
 	enum { enable_option, range_option, list_option } type;

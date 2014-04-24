@@ -43,6 +43,7 @@ struct wfs_bert_stats {
 };
 
 struct wfs_bert_cfg {
+    volatile int on;    /* switch on/off */
     u_long jfs;         /* local jiffies at reset */
     u_long jfs_last;    /* local jiffies at last send/receive */
     u32 seqno;          /* local:seqno of next response, remote:seqno of next request */
