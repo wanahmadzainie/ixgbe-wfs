@@ -144,7 +144,8 @@
  *
  * Since netdev_alloc_skb now allocates a page fragment we can use a value
  * of 256 and the resultant skb will have a truesize of 960 or less.
- */#ifdef IXGBE_WFS
+ */
+#ifdef IXGBE_WFS
 #define IXGBE_RX_HDR_SIZE   IXGBE_RXBUFFER_1K
 #else
 #define IXGBE_RX_HDR_SIZE	IXGBE_RXBUFFER_256
@@ -766,6 +767,8 @@ struct ixgbe_therm_proc_data {
 /* board specific private data structure */
 struct ixgbe_adapter {
 #ifdef IXGBE_WFS
+    char name[IFNAMSIZ];
+    spinlock_t xmit_lock;
     bool is_wfs_primary;
     struct ixgbe_wfs_adapter *wfs_parent;
     struct ixgbe_adapter *wfs_next;

@@ -77,7 +77,7 @@ enum ixgbe_wfs_adapter_state {
 struct ixgbe_wfs_adapter {
     u8 index;           /* index */
     enum ixgbe_wfs_adapter_state state;
-    u8 name[16];        /* name */
+    char name[IFNAMSIZ];/* name */
     u8 wfs_id;          /* from module option */
     u8 mac_addr[6];     /* from primary adapter perm_addr */
     u32 ip;             /* from net_device */

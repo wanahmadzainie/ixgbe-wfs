@@ -3457,7 +3457,7 @@ static int ixgbe_request_msix_irqs(struct ixgbe_adapter *adapter)
 		if (q_vector->tx.ring && q_vector->rx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
 #ifdef IXGBE_WFS
-			"%s.%d-%s-%d", netdev->name, adapter->wfs_port, "TxRx", ri++);
+			"%s-%s-%d", adapter->name, "TxRx", ri++);
 #else
 			"%s-%s-%d", netdev->name, "TxRx", ri++);
 #endif
@@ -3465,14 +3465,14 @@ static int ixgbe_request_msix_irqs(struct ixgbe_adapter *adapter)
 		} else if (q_vector->rx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
 #ifdef IXGBE_WFS
-			"%s.%d-%s-%d", netdev->name, adapter->wfs_port, "rx", ri++);
+			"%s-%s-%d", adapter->name, "rx", ri++);
 #else
 			"%s-%s-%d", netdev->name, "rx", ri++);
 #endif
 		} else if (q_vector->tx.ring) {
 			snprintf(q_vector->name, sizeof(q_vector->name) - 1,
 #ifdef IXGBE_WFS
-			"%s.%d-%s-%d", netdev->name, adapter->wfs_port, "tx", ti++);
+		    "%s-%s-%d", adapter->name, "tx", ti++);
 #else
             "%s-%s-%d", netdev->name, "tx", ti++);
 #endif
@@ -3498,7 +3498,11 @@ static int ixgbe_request_msix_irqs(struct ixgbe_adapter *adapter)
 	}
 
 	err = request_irq(adapter->msix_entries[vector].vector,
+#ifdef IXGBE_WFS
+	          ixgbe_msix_other, 0, adapter->name, adapter);
+#else
 			  ixgbe_msix_other, 0, netdev->name, adapter);
+#endif
 	if (err) {
 		e_err(probe, "request_irq for msix_other failed: %d\n", err);
 		goto free_queue_irqs;
@@ -3615,10 +3619,18 @@ static int ixgbe_request_irq(struct ixgbe_adapter *adapter)
 		err = ixgbe_request_msix_irqs(adapter);
 	else if (adapter->flags & IXGBE_FLAG_MSI_ENABLED)
 		err = request_irq(adapter->pdev->irq, &ixgbe_intr, 0,
+#ifdef IXGBE_WFS
+                  adapter->name, adapter);
+#else
 				  netdev->name, adapter);
+#endif
 	else
 		err = request_irq(adapter->pdev->irq, &ixgbe_intr, IRQF_SHARED,
+#ifdef IXGBE_WFS
+                  adapter->name, adapter);
+#else
 				  netdev->name, adapter);
+#endif
 
 	if (err)
 		e_err(probe, "request_irq failed, Error %d\n", err);
@@ -8785,7 +8797,7 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 	}
 
 #ifdef IXGBE_WFS
-    spin_lock_bh(&iwa->xmit_lock);
+    spin_lock_bh(&adapter->xmit_lock);
 #endif
 
 #ifdef HAVE_TX_MQ
@@ -8799,7 +8811,7 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 #ifdef IXGBE_WFS
 	if ((rc = ixgbe_xmit_frame_ring(skb, adapter, tx_ring)) != NETDEV_TX_OK)
         iwa->xmit_err++;
-    spin_unlock_bh(&iwa->xmit_lock);
+    spin_unlock_bh(&adapter->xmit_lock);
     return rc;
 #else
 	return ixgbe_xmit_frame_ring(skb, adapter, tx_ring);
@@ -10364,11 +10376,14 @@ no_info_string:
 			
 #ifdef IXGBE_WFS
 	if (is_primary) {
+	    spin_lock_init(&adapter->xmit_lock);
         iwa->ndev = netdev;
 	    iwa->primary = adapter;
 	    iwa->state = partial_initialized;
 	    memcpy(iwa->mac_addr, netdev->dev_addr, netdev->addr_len);
+
 	} else {
+	    spin_lock_init(&adapter->xmit_lock);
         iwa->secondary = adapter;
         iwa->primary->wfs_next = iwa->primary->wfs_other = adapter;
         adapter->wfs_other = iwa->primary;
@@ -10466,7 +10481,9 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
                 ixgbe_wfs_remove(iwa, iwa->secondary->pdev);
         } else {
             iwa->primary->netdev_registered = iwa->secondary->netdev_registered = true;
-            strcpy(iwa->name, iwa->ndev->name);
+            snprintf(iwa->name, IFNAMSIZ-1, "%s", iwa->ndev->name);
+            snprintf(iwa->primary->name, IFNAMSIZ-1, "%s.%d", iwa->ndev->name, iwa->primary->wfs_port);
+            snprintf(iwa->secondary->name, IFNAMSIZ-1, "%s.%d", iwa->ndev->name, iwa->secondary->wfs_port);
         }
 #ifdef WFS_IOC
         err = ixgbe_wfs_init2(iwa);
