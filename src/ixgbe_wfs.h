@@ -64,6 +64,9 @@
 #define WFS_DEVID(pdev)     PCI_DEVID(pdev->bus->number,(pdev->devfn & ~0x7))
 #define WFS_PORTID(pdev)    (pdev->devfn & 0x7)
 
+#define WFS_DEFAULT_MTU     9000
+#define WFS_DEFAULT_TXQLEN  10000
+
 enum ixgbe_wfs_adapter_state {
     unused,
     allocated,

@@ -324,7 +324,9 @@ dev_ioctl_done:
 
 static ssize_t ixgbe_cdev_read(struct file *filp, __user char *buf, size_t count, loff_t *ppos)
 {
+#if IXGBE_WFS_DEBUGLEVEL >= 4
     struct ixgbe_wfs_adapter *iwa = (struct ixgbe_wfs_adapter *)filp->private_data;
+#endif
     int retval = 0;
 
     log_debug("Enter\n");
@@ -334,7 +336,9 @@ static ssize_t ixgbe_cdev_read(struct file *filp, __user char *buf, size_t count
 
 static ssize_t ixgbe_cdev_write(struct file *filp, const char __user *buf, size_t count, loff_t *ppos)
 {
+#if IXGBE_WFS_DEBUGLEVEL >= 4
     struct ixgbe_wfs_adapter *iwa = (struct ixgbe_wfs_adapter *)filp->private_data;
+#endif
     int retval = 0;
 
     log_debug("Enter\n");

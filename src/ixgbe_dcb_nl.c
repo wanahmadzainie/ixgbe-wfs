@@ -347,6 +347,10 @@ static u8 ixgbe_dcbnl_set_all(struct net_device *netdev)
 		int i;
 #endif
 
+#ifdef IXGBE_WFS
+    max_frame += WFSPKT_MAX_SIZE;
+#endif
+
 #ifdef IXGBE_FCOE
 		if (adapter->netdev->features & NETIF_F_FCOE_MTU)
 			max_frame = max(max_frame, IXGBE_FCOE_JUMBO_FRAME_SIZE);
@@ -617,6 +621,10 @@ static int ixgbe_dcbnl_ieee_setets(struct net_device *dev,
 	int i, err = 0;
 	__u8 max_tc = 0;
 	__u8 map_chg = 0;
+
+#ifdef IXGBE_WFS
+    max_frame += WFSPKT_MAX_SIZE;
+#endif
 
 	if (!(adapter->dcbx_cap & DCB_CAP_DCBX_VER_IEEE))
 		return -EINVAL;

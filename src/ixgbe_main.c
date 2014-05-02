@@ -2521,8 +2521,9 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 #endif /* IXGBE_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
 #ifdef IXGBE_WFS
-	struct ixgbe_adapter *adapter = (struct ixgbe_adapter *)q_vector->adapter;
-	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#if IXGBE_WFS_DEBUGLEVEL >= 4
+	struct ixgbe_wfs_adapter *iwa = ((struct ixgbe_adapter *)q_vector->adapter)->wfs_parent;
+#endif
 #endif
 
 	do {
@@ -3446,7 +3447,9 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
  **/
 static int ixgbe_request_msix_irqs(struct ixgbe_adapter *adapter)
 {
+#ifndef IXGBE_WFS
 	struct net_device *netdev = adapter->netdev;
+#endif
 	int vector, err;
 	int ri = 0, ti = 0;
 
@@ -3612,7 +3615,9 @@ static irqreturn_t ixgbe_intr(int irq, void *data)
  **/
 static int ixgbe_request_irq(struct ixgbe_adapter *adapter)
 {
+#ifndef IXGBE_WFS
 	struct net_device *netdev = adapter->netdev;
+#endif
 	int err;
 
 	if (adapter->flags & IXGBE_FLAG_MSIX_ENABLED)
@@ -4400,7 +4405,7 @@ static void ixgbe_set_rx_buffer_len(struct ixgbe_adapter *adapter)
 #endif
 
 #ifdef IXGBE_WFS
-    max_frame = IXGBE_MAX_JUMBO_FRAME_SIZE;
+    max_frame += WFSPKT_MAX_SIZE;
 #endif
 
 #ifdef IXGBE_FCOE
@@ -4577,7 +4582,14 @@ static void ixgbe_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
 	int pool_ndx = VMDQ_P(0);
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
+#ifdef IXGBE_WFS
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+        hw = &adapter->hw;
+#endif
 	/* add VID to filter table */
 	if (hw->mac.ops.set_vfta) {
 #ifndef HAVE_VLAN_RX_REGISTER
@@ -4600,8 +4612,8 @@ static void ixgbe_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
 			}
 		}
 	}
-#ifndef HAVE_NETDEV_VLAN_FEATURES
 
+#ifndef HAVE_NETDEV_VLAN_FEATURES
 	/*
 	 * Copy feature flags from netdev to the vlan netdev for this vid.
 	 * This allows things like TSO to bubble down to our vlan device.
@@ -4617,6 +4629,11 @@ static void ixgbe_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
 		}
 	}
 #endif /* HAVE_NETDEV_VLAN_FEATURES */
+
+#ifdef IXGBE_WFS
+    }
+#endif
+
 #ifdef HAVE_INT_NDO_VLAN_RX_ADD_VID
 	return 0;
 #endif
@@ -4636,6 +4653,9 @@ static void ixgbe_vlan_rx_kill_vid(struct net_device *netdev, u16 vid)
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
 	int pool_ndx = VMDQ_P(0);
+#ifdef IXGBE_WFS
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
 	/* User is not allowed to remove vlan ID 0 */
 	if (!vid)
@@ -4645,6 +4665,10 @@ static void ixgbe_vlan_rx_kill_vid(struct net_device *netdev, u16 vid)
 		return;
 #endif
 
+#ifdef IXGBE_WFS
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+        hw = &adapter->hw;
+#endif
 #ifdef HAVE_VLAN_RX_REGISTER
 	if (!test_bit(__IXGBE_DOWN, &adapter->state))
 		ixgbe_irq_disable(adapter);
@@ -4677,6 +4701,11 @@ static void ixgbe_vlan_rx_kill_vid(struct net_device *netdev, u16 vid)
 
 	clear_bit(vid, adapter->active_vlans);
 #endif
+
+#ifdef IXGBE_WFS
+    }
+#endif
+
 #ifdef HAVE_INT_NDO_VLAN_RX_ADD_VID
 	return 0;
 #endif
@@ -4760,6 +4789,13 @@ void ixgbe_vlan_mode(struct net_device *netdev, u32 features)
 #ifdef HAVE_8021P_SUPPORT
 	bool enable;
 #endif
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+
+#ifdef IXGBE_WFS
+	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+#endif
 
 #ifdef HAVE_VLAN_RX_REGISTER
 	if (!test_bit(__IXGBE_DOWN, &adapter->state))
@@ -4788,6 +4824,10 @@ void ixgbe_vlan_mode(struct net_device *netdev, u32 features)
 		ixgbe_vlan_stripping_disable(adapter);
 
 #endif /* HAVE_8021P_SUPPORT */
+
+#ifdef IXGBE_WFS
+	}
+#endif
 }
 
 static void ixgbe_restore_vlan(struct ixgbe_adapter *adapter)
@@ -5079,21 +5119,20 @@ int ixgbe_write_uc_addr_list(struct net_device *netdev, int vfn)
  * responsible for configuring the hardware for proper unicast, multicast and
  * promiscuous mode.
  **/
+#ifdef IXGBE_WFS
+void ixgbe_wfs_set_rx_mode(struct ixgbe_adapter *adapter)
+{
+    struct net_device *netdev = adapter->netdev;
+#else
 void ixgbe_set_rx_mode(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+#endif
 	struct ixgbe_hw *hw = &adapter->hw;
 	u32 fctrl, vmolr = IXGBE_VMOLR_BAM | IXGBE_VMOLR_AUPE;
 	u32 vlnctrl;
 	int count;
-#ifdef IXGBE_WFS
-	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
-#endif
 	
-#ifdef IXGBE_WFS
-	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
-	    hw = &adapter->hw;
-#endif
 	/* Check for Promiscuous and All Multicast modes */
 	fctrl = IXGBE_READ_REG(hw, IXGBE_FCTRL);
 	vlnctrl = IXGBE_READ_REG(hw, IXGBE_VLNCTRL);
@@ -5164,10 +5203,20 @@ void ixgbe_set_rx_mode(struct net_device *netdev)
 
 	IXGBE_WRITE_REG(hw, IXGBE_VLNCTRL, vlnctrl);
 	IXGBE_WRITE_REG(hw, IXGBE_FCTRL, fctrl);
-#ifdef IXGBE_WFS
-	}
-#endif
 }
+
+#ifdef IXGBE_WFS
+void ixgbe_set_rx_mode(struct net_device *netdev)
+{
+    struct ixgbe_wfs_adapter *iwa =
+            ((struct ixgbe_adapter *)netdev_priv(netdev))->wfs_parent;
+    struct ixgbe_adapter *adapter;
+
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+        ixgbe_wfs_set_rx_mode(adapter);
+    }
+}
+#endif
 
 static void ixgbe_napi_enable_all(struct ixgbe_adapter *adapter)
 {
@@ -5249,6 +5298,10 @@ static void ixgbe_configure_dcb(struct ixgbe_adapter *adapter)
 	struct net_device *dev = adapter->netdev;
 
 	int max_frame = dev->mtu + ETH_HLEN + ETH_FCS_LEN;
+
+#ifdef IXGBE_WFS
+    max_frame += WFSPKT_MAX_SIZE;
+#endif
 
 	if (!(adapter->flags & IXGBE_FLAG_DCB_ENABLED)) {
 		if (hw->mac.type == ixgbe_mac_82598EB)
@@ -5451,7 +5504,11 @@ static int ixgbe_hpbthresh(struct ixgbe_adapter *adapter, int pb)
 	u32 dv_id, rx_pba;
 
 	/* Calculate max LAN frame size */
+#ifdef IXGBE_WFS
+	tc = link = dev->mtu + ETH_HLEN + ETH_FCS_LEN + IXGBE_ETH_FRAMING + WFSPKT_MAX_SIZE;
+#else
 	tc = link = dev->mtu + ETH_HLEN + ETH_FCS_LEN + IXGBE_ETH_FRAMING;
+#endif
 
 #ifdef IXGBE_FCOE
 	/* FCoE traffic class uses FCOE jumbo frames */
@@ -5510,6 +5567,9 @@ static int ixgbe_lpbthresh(struct ixgbe_adapter *adapter, int pb)
 
 	/* Calculate max LAN frame size */
 	tc = dev->mtu + ETH_HLEN + ETH_FCS_LEN;
+#ifdef IXGBE_WFS
+	tc += WFSPKT_MAX_SIZE;
+#endif
 
 #ifdef IXGBE_FCOE
 	/* FCoE traffic class uses FCOE jumbo frames */
@@ -5614,7 +5674,11 @@ static void ixgbe_configure(struct ixgbe_adapter *adapter)
 	 */
 	ixgbe_configure_virtualization(adapter);
 
+#ifdef IXGBE_WFS
+	ixgbe_wfs_set_rx_mode(adapter);
+#else
 	ixgbe_set_rx_mode(adapter->netdev);
+#endif
 #if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
 	ixgbe_restore_vlan(adapter);
 #endif
@@ -6651,6 +6715,7 @@ static int ixgbe_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	int max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN;
+
 #ifdef IXGBE_WFS
 	max_frame += WFSPKT_MAX_SIZE;
 #endif
@@ -6675,7 +6740,14 @@ static int ixgbe_change_mtu(struct net_device *netdev, int new_mtu)
 	netdev->mtu = new_mtu;
 
 	if (netif_running(netdev))
+#ifdef IXGBE_WFS
+	{
+#endif
 		ixgbe_reinit_locked(adapter);
+#ifdef IXGBE_WFS
+		ixgbe_reinit_locked(adapter->wfs_other);
+	}
+#endif
 
 	return 0;
 }
@@ -6853,11 +6925,7 @@ static int ixgbe_resume(struct pci_dev *pdev)
 #endif
 
 #ifdef IXGBE_WFS
-    log_warn("resume\n");
-
-    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
-        log_debug("wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
-        pdev = adapter->pdev;
+    log_warn("wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
 #endif
 
 	pci_set_power_state(pdev, PCI_D0);
@@ -6904,9 +6972,6 @@ static int ixgbe_resume(struct pci_dev *pdev)
 #endif
 	netif_device_attach(netdev);
 
-#ifdef IXGBE_WFS
-    }
-#endif
 	return 0;
 }
 #endif /* CONFIG_PM */
@@ -6960,10 +7025,10 @@ static int __ixgbe_shutdown(struct pci_dev *pdev, bool *enable_wake)
 
 	if (wufc) {
 #ifdef IXGBE_WFS
-	    if (adapter->is_wfs_primary)
-#endif
+	    ixgbe_wfs_set_rx_mode(adapter);
+#else
 		ixgbe_set_rx_mode(netdev);
-
+#endif
 		/* enable the optics for 82599 SFP+ fiber as we can WoL */
 		if (hw->mac.ops.enable_tx_laser)
 			hw->mac.ops.enable_tx_laser(hw);
@@ -7020,11 +7085,7 @@ static int ixgbe_suspend(struct pci_dev *pdev, pm_message_t state)
 #endif
 
 #ifdef IXGBE_WFS
-    log_debug("suspend\n");
-
-    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
-        log_warn("suspend wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
-        pdev = adapter->pdev;
+    log_warn("suspend wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
 #endif
 
 	retval = __ixgbe_shutdown(pdev, &wake);
@@ -7039,8 +7100,8 @@ static int ixgbe_suspend(struct pci_dev *pdev, pm_message_t state)
 	}
 
 #ifdef IXGBE_WFS
-    }
-    iwa->state = suspended;
+    if (adapter->is_wfs_primary)
+        iwa->state = suspended;
 #endif
 
 	return 0;
@@ -7057,9 +7118,7 @@ static void ixgbe_shutdown(struct pci_dev *pdev)
 #endif
 
 #ifdef IXGBE_WFS
-    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
-        log_warn("shutdown wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
-        pdev = adapter->pdev;
+    log_warn("shutdown wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
 #endif
 
 	__ixgbe_shutdown(pdev, &wake);
@@ -7070,7 +7129,8 @@ static void ixgbe_shutdown(struct pci_dev *pdev)
 	}
 
 #ifdef IXGBE_WFS
-    }
+    if (adapter->is_wfs_primary)
+        iwa->state = suspended;
 #endif
 }
 
@@ -7155,6 +7215,7 @@ static struct net_device_stats *ixgbe_get_stats(struct net_device *netdev)
 	/* update the stats data */
 	ixgbe_update_stats(adapter);
 #ifdef IXGBE_WFS
+	/* stats will be in netdev if HAVE_NETDEV_STATS_IN_NETDEV, or in adapter (primary) */
     ixgbe_update_stats(adapter->wfs_other);
 #endif
 
@@ -7170,6 +7231,9 @@ static struct net_device_stats *ixgbe_get_stats(struct net_device *netdev)
 /**
  * ixgbe_update_stats - Update the board statistics counters.
  * @adapter: board private structure
+#ifdef IXGBE_WFS
+ * update stats to netdev if HAVE_NETDEV_STATS_IN_NETDEV, or in primary adapter
+#endif
  **/
 void ixgbe_update_stats(struct ixgbe_adapter *adapter)
 {
@@ -7187,6 +7251,11 @@ void ixgbe_update_stats(struct ixgbe_adapter *adapter)
 	u64 bytes = 0, packets = 0, hw_csum_rx_error = 0;
 #ifndef IXGBE_NO_LRO
 	u32 flushed = 0, coal = 0;
+#endif
+
+#if defined(IXGBE_WFS) && !defined(HAVE_NETDEV_STATS_IN_NETDEV)
+	if (!adapter->is_wfs_primary)
+	    net_stats = &adapter->wfs_other->net_stats;
 #endif
 
 	if (test_bit(__IXGBE_DOWN, &adapter->state) ||
@@ -7230,8 +7299,17 @@ void ixgbe_update_stats(struct ixgbe_adapter *adapter)
 	adapter->alloc_rx_page_failed = alloc_rx_page_failed;
 	adapter->alloc_rx_buff_failed = alloc_rx_buff_failed;
 	adapter->hw_csum_rx_error = hw_csum_rx_error;
+#if defined(IXGBE_WFS) && !defined(HAVE_NETDEV_STATS_IN_NETDEV)
+	if (adapter->is_wfs_primary) {
+#endif
 	net_stats->rx_bytes = bytes;
 	net_stats->rx_packets = packets;
+#if defined(IXGBE_WFS) && !defined(HAVE_NETDEV_STATS_IN_NETDEV)
+	} else {
+	net_stats->rx_bytes += bytes;
+	net_stats->rx_packets += packets;
+	}
+#endif
 
 	bytes = 0;
 	packets = 0;
@@ -7245,8 +7323,17 @@ void ixgbe_update_stats(struct ixgbe_adapter *adapter)
 	}
 	adapter->restart_queue = restart_queue;
 	adapter->tx_busy = tx_busy;
+#if defined(IXGBE_WFS) && !defined(HAVE_NETDEV_STATS_IN_NETDEV)
+    if (adapter->is_wfs_primary) {
+#endif
 	net_stats->tx_bytes = bytes;
 	net_stats->tx_packets = packets;
+#if defined(IXGBE_WFS) && !defined(HAVE_NETDEV_STATS_IN_NETDEV)
+    } else {
+    net_stats->tx_bytes += bytes;
+    net_stats->tx_packets += packets;
+    }
+#endif
 
 	hwstats->crcerrs += IXGBE_READ_REG(hw, IXGBE_CRCERRS);
 
@@ -7391,6 +7478,10 @@ void ixgbe_update_stats(struct ixgbe_adapter *adapter)
 	hwstats->ptc1023 += IXGBE_READ_REG(hw, IXGBE_PTC1023);
 	hwstats->ptc1522 += IXGBE_READ_REG(hw, IXGBE_PTC1522);
 	hwstats->bptc += IXGBE_READ_REG(hw, IXGBE_BPTC);
+
+#if defined(IXGBE_WFS) && !defined(HAVE_NETDEV_STATS_IN_NETDEV)
+    if (adapter->is_wfs_primary) {
+#endif
 	/* Fill out the OS statistics structure */
 	net_stats->multicast = hwstats->mprc;
 
@@ -7401,7 +7492,20 @@ void ixgbe_update_stats(struct ixgbe_adapter *adapter)
 	net_stats->rx_length_errors = hwstats->rlec;
 	net_stats->rx_crc_errors = hwstats->crcerrs;
 	net_stats->rx_missed_errors = total_mpc;
+#if defined(IXGBE_WFS) && !defined(HAVE_NETDEV_STATS_IN_NETDEV)
+    } else {
+    /* Fill out the OS statistics structure */
+    net_stats->multicast += hwstats->mprc;
 
+    /* Rx Errors */
+    net_stats->rx_errors += hwstats->crcerrs +
+                       hwstats->rlec;
+    net_stats->rx_dropped = 0;
+    net_stats->rx_length_errors += hwstats->rlec;
+    net_stats->rx_crc_errors += hwstats->crcerrs;
+    net_stats->rx_missed_errors += total_mpc;
+    }
+#endif
 	/*
 	 * VF Stats Collection - skip while resetting because these
 	 * are not clear on read and otherwise you'll sometimes get
@@ -8611,7 +8715,9 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 			  struct ixgbe_ring *tx_ring)
 {
 #ifdef IXGBE_WFS
+#if IXGBE_WFS_DEBUGLEVEL >= 4
     struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 #endif
 	struct ixgbe_tx_buffer *first;
 	int tso;
@@ -8772,6 +8878,9 @@ out_drop:
 netdev_tx_t ixgbe_xmit_wfs_frame(struct sk_buff *skb,
                     struct ixgbe_adapter *adapter)
 {
+    struct net_device *netdev = adapter->netdev;
+    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+    netdev_tx_t rc;
 #else
 static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 				    struct net_device *netdev)
@@ -8782,10 +8891,16 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 #ifdef HAVE_TX_MQ
 	unsigned int r_idx = skb->queue_mapping;
 #endif
+
 #ifdef IXGBE_WFS
-    struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
-    netdev_tx_t rc;
+    if (!adapter->link_up || !netif_carrier_ok(netdev)) {
+#else
+    if (!netif_carrier_ok(netdev)) {
 #endif
+            dev_kfree_skb_any(skb);
+            return NETDEV_TX_OK;
+    }
+
 	/*
 	 * The minimum packet size for olinfo paylen is 17 so pad the skb
 	 * in order to meet this minimum size requirement.
@@ -8830,7 +8945,7 @@ static netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
 
     log_debug("Enter, skb_len %d\n", skb->len);
 
-    if (iwa->state != opened || !iwa->link_up) {
+    if (iwa->state != opened || !iwa->link_up || !netif_carrier_ok(netdev)) {
         log_debug("not in open state or both links down, skb drop\n");
         dev_kfree_skb_any(skb);
         return NETDEV_TX_OK;
@@ -8913,18 +9028,31 @@ static int ixgbe_set_mac(struct net_device *netdev, void *p)
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
 	struct sockaddr *addr = p;
-	int ret;
+	int ret = 0;
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
+#ifdef IXGBE_WFS
+	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+	    hw = &adapter->hw;
+#endif
 	ixgbe_del_mac_filter(adapter, hw->mac.addr, VMDQ_P(0));
 	memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
 	memcpy(hw->mac.addr, addr->sa_data, netdev->addr_len);
 
-
 	/* set the correct pool for the new PF MAC address in entry 0 */
 	ret = ixgbe_add_mac_filter(adapter, hw->mac.addr, VMDQ_P(0));
+
+#ifdef IXGBE_WFS
+	if (ret < 0)
+	    break;
+	}
+#endif
+
 	return (ret > 0 ? 0 : ret);
 }
 
@@ -9079,7 +9207,13 @@ static int ixgbe_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 static void ixgbe_netpoll(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
+#ifdef IXGBE_WFS
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+#endif
 	/* if interface is down do nothing */
 	if (test_bit(__IXGBE_DOWN, &adapter->state))
 		return;
@@ -9093,6 +9227,10 @@ static void ixgbe_netpoll(struct net_device *netdev)
 	} else {
 		ixgbe_intr(0, adapter);
 	}
+
+#ifdef IXGBE_WFS
+    }
+#endif
 }
 #endif /* CONFIG_NET_POLL_CONTROLLER */
 
@@ -9170,6 +9308,9 @@ int ixgbe_setup_tc(struct net_device *dev, u8 tc)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
 	struct ixgbe_hw *hw = &adapter->hw;
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
 
 	/* Hardware supports up to 8 traffic classes */
 	if (tc > adapter->dcb_cfg.num_tcs.pg_tcs ||
@@ -9183,6 +9324,12 @@ int ixgbe_setup_tc(struct net_device *dev, u8 tc)
 	 */
 	if (netif_running(dev))
 		ixgbe_close(dev);
+
+#ifdef IXGBE_WFS
+	for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+	    hw = &adapter->hw;
+#endif
+
 	ixgbe_clear_interrupt_scheme(adapter);
 
 	if (tc) {
@@ -9209,6 +9356,11 @@ int ixgbe_setup_tc(struct net_device *dev, u8 tc)
 
 	ixgbe_init_interrupt_scheme(adapter);
 	ixgbe_validate_rtr(adapter, tc);
+
+#ifdef IXGBE_WFS
+    }
+#endif
+
 	if (netif_running(dev))
 		ixgbe_open(dev);
 
@@ -9272,6 +9424,13 @@ static int ixgbe_set_features(struct net_device *netdev,
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	bool need_reset = false;
+#ifdef IXGBE_WFS
+	struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
+#endif
+
+#ifdef IXGBE_WFS
+    for (adapter=iwa->primary; adapter; adapter=adapter->wfs_next) {
+#endif
 
 	/* Make sure RSC matches LRO, reset if change */
 	if (!(features & NETIF_F_LRO)) {
@@ -9343,6 +9502,10 @@ static int ixgbe_set_features(struct net_device *netdev,
 		ixgbe_vlan_stripping_enable(adapter);
 	else
 		ixgbe_vlan_stripping_disable(adapter);
+
+#ifdef IXGBE_WFS
+    }
+#endif
 
 	if (need_reset)
 		ixgbe_do_reset(netdev);
@@ -9477,6 +9640,11 @@ static int ixgbe_ndo_bridge_setlink(struct net_device *dev,
 			return -EINVAL;
 
 		IXGBE_WRITE_REG(&adapter->hw, IXGBE_PFDTXGSWC, reg);
+
+#ifdef IXGBE_WFS
+		adapter->wfs_other->flags = adapter->flags;
+		IXGBE_WRITE_REG(&adapter->wfs_other->hw, IXGBE_PFDTXGSWC, reg);
+#endif
 
 		e_info(drv, "enabling bridge mode: %s\n",
 			mode == BRIDGE_MODE_VEPA ? "VEPA" : "VEB");
@@ -9831,6 +9999,8 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 	adapter = netdev_priv(netdev);
 	
 #ifdef IXGBE_WFS
+	netdev->mtu = WFS_DEFAULT_MTU;
+	netdev->tx_queue_len = WFS_DEFAULT_TXQLEN;
 	adapter->is_wfs_primary = true;
 	} else {
 	/* use same netdevice when probe secondary port */
@@ -10455,10 +10625,10 @@ static void __devexit ixgbe_wfs_remove(struct ixgbe_wfs_adapter *iwa, struct pci
 static int __devinit ixgbe_probe(struct pci_dev *pdev,
                  const struct pci_device_id *ent)
 {
-    int err = 0;
-    struct ixgbe_wfs_adapter *iwa;
 
-    iwa = ixgbe_wfs_get_adapter(WFS_DEVID(pdev));
+    struct ixgbe_wfs_adapter *iwa = ixgbe_wfs_get_adapter(WFS_DEVID(pdev));
+    int err = 0;
+
     if (!iwa || iwa->state == initialized)
 	    return -EIO;
 
@@ -10510,7 +10680,9 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 #endif
 {
 	struct ixgbe_adapter *adapter = pci_get_drvdata(pdev);
+#if defined(HAVE_NETDEV_STORAGE_ADDRESS) && defined(NETDEV_HW_ADDR_T_SAN)
 	struct net_device *netdev = adapter->netdev;
+#endif
 
 #ifdef HAVE_IXGBE_DEBUG_FS
 	ixgbe_dbg_adapter_exit(adapter);
@@ -10603,8 +10775,6 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 {
     struct ixgbe_adapter *adapter = pci_get_drvdata(pdev);
     struct ixgbe_wfs_adapter *iwa = adapter->wfs_parent;
-
-    log_debug("remove\n");
 
     log_warn("remove wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
 
