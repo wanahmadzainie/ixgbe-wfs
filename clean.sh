@@ -7,7 +7,7 @@ OUTPUT=$PWD/obj
 ccache --clear
 
 cd $DRIVER_SRC
-make install
+make clean
 
 cd $APP_SRC
-make install
+make clean

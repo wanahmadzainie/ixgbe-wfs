@@ -418,7 +418,7 @@ int ixgbe_wfs_ioc_init(struct ixgbe_wfs_adapter *iwa)
         unregister_chrdev_region(myDevNo, 1);
         return err;
     }
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 32)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 32)
     device = device_create(myDevClass, NULL, myDevNo, myDevName);
 #else
     device = device_create(myDevClass, NULL, myDevNo, NULL, myDevName);

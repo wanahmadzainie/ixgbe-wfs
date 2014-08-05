@@ -2,6 +2,7 @@
 #define _IXGBE_WFS_ENC_H_
 
 #include <linux/types.h>
+#include <linux/if_ether.h>
 
 #define WFSID_MAX   8
 #define WFSID_MIN   1
@@ -25,7 +26,7 @@
 #define WFSPKT_TYPE_DATA_BROADCAST  (WFSPKT_TYPE_BROADCAST_MASK + WFSPKT_TYPE_DATA_MASK)
 #define WFSPKT_TYPE_DATA_UNICAST    (WFSPKT_TYPE_DATA_MASK)
 
-#define WFSPKT_ETHERTYPE        0x7083  /* Xilinx PCI Device ID */
+#define WFSPKT_ETHERTYPE        0x88B5  /* WFS local experiment type */
 
 #define WFSPKT_MIN_NUM          1999    /* same as DMA_BD_CNT */
 #define WFSPKT_MAX_NUM          3000
