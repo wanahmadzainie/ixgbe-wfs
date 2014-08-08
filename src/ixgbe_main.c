@@ -669,6 +669,31 @@ struct ixgbe_adapter *adapter = netdev_priv(netdev);
 #endif
 }
 
+#if defined(CHECK_TX_RING) || defined(CHECK_RX_RING)
+void check_ring(struct ixgbe_ring *tx_ring, char *action, int bytes)
+{
+    static int num_queued[2][10], num_completed[2][10];
+    struct ixgbe_adapter *adapter = tx_ring->q_vector->adapter;
+    int p = adapter->wfs_port;
+    int q = tx_ring->queue_index;
+    int q1 = ring_queue_index(tx_ring);
+    struct netdev_queue *queue = netdev_get_tx_queue(tx_ring->netdev, q1);
+    struct dql *dql = &queue->dql;
+    int n_queued =  ACCESS_ONCE(dql->num_queued);
+    int n_completed =  dql->num_completed;
+
+    printk("%s: port%dqueue%d(%x): %s %d bytes, num_queued %d->%d, num_completed %d->%d\n",
+        __FUNCTION__,
+        p, q, (u64)tx_ring & 0xffffffff,
+        action, bytes,
+        num_queued[p][q], n_queued,
+        num_completed[p][q], n_completed);
+
+    num_queued[p][q] = n_queued;
+    num_completed[p][q] = n_completed;
+}
+#endif
+
 /**
  * ixgbe_clean_tx_irq - Reclaim resources after transmit completes
  * @q_vector: structure containing interrupt and ring information
@@ -802,27 +827,31 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 		return true;
 	}
 
-#if 0 
+#ifdef CHECK_TX_RING
     /*
      * debug for bufferbloat feature (CONFIG_BQL) in kernel 3.11
      * code trigger BUG_ON in dynamic_queue_limits.c:26
      */
-	{
-	    struct netdev_queue *q = netdev_get_tx_queue(tx_ring->netdev, tx_ring->queue_index);
-	    struct dql *dql = &q->dql;
-	    unsigned int num_queued =  ACCESS_ONCE(q->dql.num_queued);
+    {
+        struct netdev_queue *q = netdev_get_tx_queue(tx_ring->netdev, ring_queue_index(tx_ring));
+        struct dql *dql = &q->dql;
+        unsigned int num_queued =  ACCESS_ONCE(q->dql.num_queued);
 
-	    if (total_bytes > (num_queued - dql->num_completed)) {
-	        printk("**** p%dq%d: BUG_ON(count(%d) > num_queued(%d) - dql->num_completed(%d))\n",
-	                adapter->wfs_port, tx_ring->queue_index, total_bytes,num_queued, dql->num_completed );
-	        total_bytes = (num_queued - dql->num_completed);
-	    }
-	}
+        if (total_bytes > (num_queued - dql->num_completed)) {
+            printk("check_ring: p%dq%d: BUG_ON(count(%d) > %d num_queued(%d)-dql->num_completed(%d) )\n",
+                adapter->wfs_port, tx_ring->queue_index, total_bytes,
+                num_queued - dql->num_completed, num_queued, dql->num_completed);
+        }
+    }
+
 #endif
 
 	netdev_tx_completed_queue(netdev_get_tx_queue(tx_ring->netdev,
-						      tx_ring->queue_index),
-				  total_packets, total_bytes);
+	                          ring_queue_index(tx_ring)),
+	                          total_packets, total_bytes);
+#ifdef CHECK_TX_RING
+	check_ring(tx_ring, "tx_completed", total_bytes);
+#endif
 
 #define TX_WAKE_THRESHOLD (DESC_NEEDED * 2)
 	if (unlikely(total_packets && netif_carrier_ok(netdev_ring(tx_ring)) &&
@@ -3848,7 +3877,7 @@ void ixgbe_configure_tx_ring(struct ixgbe_adapter *adapter,
 		if (q_vector)
 			netif_set_xps_queue(adapter->netdev,
 					    &q_vector->affinity_mask,
-					    ring->queue_index);
+					    ring_queue_index(ring));
 	}
 
 	clear_bit(__IXGBE_HANG_CHECK_ARMED, &ring->state);
@@ -6191,7 +6220,10 @@ static void ixgbe_clean_tx_ring(struct ixgbe_ring *tx_ring)
 	}
 
 	netdev_tx_reset_queue(netdev_get_tx_queue(tx_ring->netdev,
-						  tx_ring->queue_index));
+	                      ring_queue_index(tx_ring)));
+#ifdef CHECK_TX_RING
+    check_ring(tx_ring, "tx_reset", 0);
+#endif
 
 	size = sizeof(struct ixgbe_tx_buffer) * tx_ring->count;
 	memset(tx_ring->tx_buffer_info, 0, size);
@@ -6847,19 +6879,26 @@ static int ixgbe_open(struct net_device *netdev)
 		goto err_req_irq;
 
 #ifdef IXGBE_WFS
+	/* set netdev only once */
 	if (!adapter->is_wfs_primary) {
 #endif
 
 	/* Notify the stack of the actual queue counts. */
 	netif_set_real_num_tx_queues(netdev,
 				     adapter->num_rx_pools > 1 ? 1 :
+#ifdef IXGBE_WFS
+                     iwa->primary->num_tx_queues + iwa->secondary->num_tx_queues);
+#else
 				     adapter->num_tx_queues);
+#endif
 
 	err = netif_set_real_num_rx_queues(netdev,
-					   adapter->num_rx_pools > 1 ? 1 :
-					   adapter->num_rx_queues);
+					 adapter->num_rx_pools > 1 ? 1 :
 #ifdef IXGBE_WFS
+                     iwa->primary->num_rx_queues + iwa->secondary->num_rx_queues);
 	}
+#else
+					 adapter->num_rx_queues);
 #endif
 
 	if (err)
@@ -8532,8 +8571,11 @@ static void ixgbe_tx_map(struct ixgbe_ring *tx_ring,
 	tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type);
 
 	netdev_tx_sent_queue(netdev_get_tx_queue(tx_ring->netdev,
-						 tx_ring->queue_index),
-			     first->bytecount);
+	        ring_queue_index(tx_ring)),
+	        first->bytecount);
+#ifdef CHECK_TX_RING
+	check_ring(tx_ring, "tx_sent", first->bytecount);
+#endif
 
 	/* set the timestamp */
 	first->time_stamp = jiffies;
