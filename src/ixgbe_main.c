@@ -802,6 +802,24 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 		return true;
 	}
 
+#if 0 
+    /*
+     * debug for bufferbloat feature (CONFIG_BQL) in kernel 3.11
+     * code trigger BUG_ON in dynamic_queue_limits.c:26
+     */
+	{
+	    struct netdev_queue *q = netdev_get_tx_queue(tx_ring->netdev, tx_ring->queue_index);
+	    struct dql *dql = &q->dql;
+	    unsigned int num_queued =  ACCESS_ONCE(q->dql.num_queued);
+
+	    if (total_bytes > (num_queued - dql->num_completed)) {
+	        printk("**** p%dq%d: BUG_ON(count(%d) > num_queued(%d) - dql->num_completed(%d))\n",
+	                adapter->wfs_port, tx_ring->queue_index, total_bytes,num_queued, dql->num_completed );
+	        total_bytes = (num_queued - dql->num_completed);
+	    }
+	}
+#endif
+
 	netdev_tx_completed_queue(netdev_get_tx_queue(tx_ring->netdev,
 						      tx_ring->queue_index),
 				  total_packets, total_bytes);
@@ -1977,9 +1995,11 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
 #if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
             ixgbe_rx_vlan(rx_ring, rx_desc, nskb);
 #ifdef HAVE_VLAN_RX_REGISTER
-            nskb = vlan_put_tag(nskb, IXGBE_CB(nskb)->vid);
+            if (IXGBE_CB(nskb)->vid)
+                nskb = vlan_put_tag(nskb, IXGBE_CB(nskb)->vid);
 #else
-            nskb = vlan_put_tag(nskb, htons(ETH_P_8021Q), nskb->vlan_tci);
+            if (nskb->vlan_tci)
+                nskb = vlan_put_tag(nskb, htons(ETH_P_8021Q), nskb->vlan_tci);
 #endif
 #endif
             if (nskb)
@@ -2090,7 +2110,6 @@ static void ixgbe_process_skb_fields(struct ixgbe_ring *rx_ring,
 #else
         u16 vid = skb->vlan_tci;
 #endif
-
         l2hdr.network = skb->data;
         if ((l2hdr.eth->h_proto == __constant_htons(ETH_P_8021Q) &&
                 l2hdr.veth->h_vlan_encapsulated_proto == __constant_htons(ETH_P_IP)))
@@ -7243,7 +7262,8 @@ static struct net_device_stats *ixgbe_get_stats(struct net_device *netdev)
 	ixgbe_update_stats(adapter);
 #ifdef IXGBE_WFS
 	/* stats will be in netdev if HAVE_NETDEV_STATS_IN_NETDEV, or in adapter (primary) */
-    ixgbe_update_stats(adapter->wfs_other);
+    if (adapter->wfs_other)
+        ixgbe_update_stats(adapter->wfs_other);
 #endif
 
 #ifdef HAVE_NETDEV_STATS_IN_NETDEV
@@ -10669,9 +10689,10 @@ static int __devinit ixgbe_probe(struct pci_dev *pdev,
 
     if (iwa->state == initialized) {
         /* now register netdev */
-        strcpy(iwa->ndev->name, WFS_DEVNAME_FMT);
+        sprintf(iwa->ndev->name, WFS_DEVNAME_FMT, iwa->index);
         err = register_netdev(iwa->ndev);
         if (err) {
+            free_netdev(iwa->ndev);
             if (iwa->primary)
                 ixgbe_wfs_remove(iwa, iwa->primary->pdev);
             if (iwa->secondary)
@@ -10805,8 +10826,9 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 
     log_warn("remove wfsid %d port %d\n", iwa->wfs_id, adapter->wfs_port);
 
-    if (iwa->state == opened) {
-        unregister_netdev(iwa->ndev);
+    if (iwa->ndev) {
+        if (iwa->primary->netdev_registered || iwa->secondary->netdev_registered)
+            unregister_netdev(iwa->ndev);
         free_netdev(iwa->ndev);
         iwa->ndev = NULL;
         iwa->primary->netdev_registered = iwa->secondary->netdev_registered = false;
